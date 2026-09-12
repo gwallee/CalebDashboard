@@ -1,0 +1,1540 @@
+# =============================================================================
+# Bathroom Wall Panel — ESPHome + LVGL
+# Hosyond ESP32-S3 3.5" touchscreen (240x320 IPS, capacitive touch)
+# Landscape: 320 wide x 240 tall
+#
+# EVERYTHING YOU NEED TO EDIT IS IN THE `substitutions:` BLOCK BELOW.
+#
+# !! PINS AND DRIVER MODELS ARE PLACEHOLDERS !!
+# The Arduino sketch was not supplied, so the hardware block below is a
+# best guess for this class of board. Replace the pin / model / psram values
+# from the sketch before flashing. See README.md -> "Hardware to confirm".
+# =============================================================================
+
+substitutions:
+  device_name: bathroom-panel
+  friendly_name: "Bathroom Panel"
+  timezone: "America/Chicago"          # <-- set to your TZ database name
+
+  # --- Home Assistant entities ------------------------------------------------
+  ent_indoor_temp:        sensor.calebs_room_temperature
+  ent_indoor_trend:       sensor.calebs_room_temperature_trend
+  ent_outdoor_temp:       sensor.ambient_outdoor_temperature
+  ent_outdoor_trend:      sensor.ambient_outdoor_temperature_trend
+  ent_outdoor_condition:  sensor.outdoor_condition
+  ent_pool_air_temp:      sensor.ambient_outdoor_temperature
+  ent_pool_water_temp:    sensor.pool_water_temperature
+  ent_pool_waterfall:     switch.pool_waterfall
+  ent_pool_bubblers:      switch.pool_bubblers
+  ent_fan:                fan.master_bedroom_fan
+  ent_media_player:       media_player.spotify_caleb
+  ent_daily_quote:        sensor.panel_daily_quote
+
+  # --- Behaviour --------------------------------------------------------------
+  page_timeout:      "30s"    # Pool/Fan auto-return to Home
+  manual_hold_time:  "45s"    # how long a manual idle/media override sticks
+  paused_grace_time: "3min"   # how long media mode survives a pause
+  brush_seconds:     "120"    # tooth-brushing timer length
+
+  # --- Hardware: display ------------------------------------------------------
+  # ili9xxx supports ST7789V / ILI9341 / ILI9488 etc. under one platform.
+  # 3.5" 240x320 IPS is most often ST7789V; if the sketch says otherwise,
+  # change this one line.
+  disp_model:   ST7789V
+  disp_invert:  "true"        # ST7789 IPS panels normally need inverted colors
+  pin_disp_sclk:  GPIO12
+  pin_disp_mosi:  GPIO11
+  pin_disp_miso:  GPIO13
+  pin_disp_cs:    GPIO10
+  pin_disp_dc:    GPIO9
+  pin_disp_rst:   GPIO14
+  pin_backlight:  GPIO21
+
+  # --- Hardware: touch --------------------------------------------------------
+  pin_touch_sda:  GPIO38
+  pin_touch_scl:  GPIO39
+  pin_touch_int:  GPIO40
+  pin_touch_rst:  GPIO41
+
+  # --- Hardware: I2S speaker --------------------------------------------------
+  pin_i2s_bclk:   GPIO42
+  pin_i2s_lrclk:  GPIO2
+  pin_i2s_dout:   GPIO1
+
+  # --- Hardware: memory -------------------------------------------------------
+  flash_size:  16MB
+  psram_mode:  octal           # `quad` on most 8MB-PSRAM S3 modules
+
+# =============================================================================
+# ICON GLYPH TABLE  (Material Design Icons)
+# If an icon renders as a blank box, look the name up at
+# https://pictogrammers.com/library/mdi/ and fix the codepoint here + below.
+#
+#   \U000F0599  weather-sunny        \U000F0590  weather-cloudy
+#   \U000F0597  weather-rainy        \U000F0594  weather-night
+#   \U000F050F  thermometer          \U000F02E3  bed
+#   \U000F0210  fan                  \U000F0606  pool
+#   \U000F078D  waves                \U000F058C  water
+#   \U000F075A  music                \U000F0141  chevron-left
+#   \U000F040A  play                 \U000F03E4  pause
+#   \U000F04AD  skip-next            \U000F04AE  skip-previous
+#   \U000F057E  volume-high          \U000F1129  toothbrush 
+#   \U000F005C  arrow-top-right      \U000F0054  arrow-right
+#   \U000F0043  arrow-bottom-right
+# =============================================================================
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  min_version: 2025.2.0
+  on_boot:
+    priority: 600
+    then:
+      - light.turn_on:
+          id: backlight
+          brightness: 85%
+      - script.execute: script_update_clock
+      - script.execute: script_apply_mode
+
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: ${flash_size}
+  framework:
+    type: esp-idf
+
+psram:
+  mode: ${psram_mode}
+  speed: 80MHz
+
+logger:
+  level: INFO
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${friendly_name} Fallback"
+    password: !secret ap_password
+
+captive_portal:
+
+# Clock is local SNTP so the panel keeps telling time with HA down.
+time:
+  - platform: sntp
+    id: esptime
+    timezone: ${timezone}
+    on_time:
+      - seconds: 0
+        then:
+          - script.execute: script_update_clock
+    on_time_sync:
+      - script.execute: script_update_clock
+
+globals:
+  - id: g_media_playing
+    type: bool
+    restore_value: no
+    initial_value: "false"
+  - id: g_manual_override
+    type: bool
+    restore_value: no
+    initial_value: "false"
+  - id: g_manual_media
+    type: bool
+    restore_value: no
+    initial_value: "false"
+  - id: g_brush_active
+    type: bool
+    restore_value: no
+    initial_value: "false"
+  - id: g_brush_remaining
+    type: int
+    restore_value: no
+    initial_value: "0"
+  - id: g_volume_pending
+    type: float
+    restore_value: no
+    initial_value: "0.0"
+
+# =============================================================================
+# Hardware
+# =============================================================================
+
+spi:
+  - id: bus_display
+    clk_pin: ${pin_disp_sclk}
+    mosi_pin: ${pin_disp_mosi}
+    miso_pin: ${pin_disp_miso}
+
+i2c:
+  - id: bus_touch
+    sda: ${pin_touch_sda}
+    scl: ${pin_touch_scl}
+    scan: true
+
+display:
+  - platform: ili9xxx
+    id: main_display
+    spi_id: bus_display
+    model: ${disp_model}
+    cs_pin: ${pin_disp_cs}
+    dc_pin: ${pin_disp_dc}
+    reset_pin: ${pin_disp_rst}
+    invert_colors: ${disp_invert}
+    color_order: bgr
+    data_rate: 40MHz
+    dimensions:                 # native panel size, portrait
+      width: 240
+      height: 320
+    # Landscape. If the image is upside down flip mirror_x/mirror_y (and
+    # make the SAME change under touchscreen: transform:).
+    transform:
+      swap_xy: true
+      mirror_x: true
+      mirror_y: false
+    # Both required when LVGL drives the display.
+    auto_clear_enabled: false
+    update_interval: never
+
+touchscreen:
+  - platform: gt911              # swap for `ft63x6` if the sketch says FT6236
+    id: main_touch
+    i2c_id: bus_touch
+    interrupt_pin: ${pin_touch_int}
+    reset_pin: ${pin_touch_rst}
+    display: main_display
+    transform:
+      swap_xy: true
+      mirror_x: true
+      mirror_y: false
+
+output:
+  - platform: ledc
+    id: backlight_output
+    pin: ${pin_backlight}
+    frequency: 5000Hz
+
+light:
+  - platform: monochromatic
+    id: backlight
+    name: "Backlight"
+    output: backlight_output
+    restore_mode: ALWAYS_ON
+    default_transition_length: 250ms
+
+i2s_audio:
+  - id: i2s_bus
+    i2s_lrclk_pin: ${pin_i2s_lrclk}
+    i2s_bclk_pin: ${pin_i2s_bclk}
+
+speaker:
+  - platform: i2s_audio
+    id: spk
+    i2s_audio_id: i2s_bus
+    dac_type: external
+    i2s_dout_pin: ${pin_i2s_dout}
+    channel: mono
+    sample_rate: 16000
+
+# Tones are generated on-device, so no audio files to host.
+rtttl:
+  id: buzzer
+  speaker: spk
+
+# =============================================================================
+# Palette
+# =============================================================================
+
+color:
+  - id: c_bg          # near-black background
+    hex: "111111"
+  - id: c_card        # dark gray cards
+    hex: "1D1D1D"
+  - id: c_card_hi     # slightly lifted surface (chips, header buttons)
+    hex: "262626"
+  - id: c_text        # primary text
+    hex: "F2F2F2"
+  - id: c_dim         # secondary labels
+    hex: "9A9A9A"
+  - id: c_dimmer      # inactive chips / off-state icons
+    hex: "6E6E6E"
+  - id: c_accent      # teal "on" / active
+    hex: "5DCAA5"
+  - id: c_on_text     # dark text on teal fills
+    hex: "04342C"
+  - id: c_blue        # nav buttons
+    hex: "185FA5"
+  - id: c_amber       # sun
+    hex: "F2B138"
+  - id: c_water       # water / droplet
+    hex: "62B6E8"
+  - id: c_trend_up    # rising (warm)
+    hex: "E8734A"
+  - id: c_trend_down  # falling (cool)
+    hex: "6FA8DC"
+
+# =============================================================================
+# Fonts
+#
+# Text fonts pull Latin Core from Google Fonts (needs ESPHome >= 2024.11).
+# Icon fonts are Material Design Icons; see the glyph table at the top.
+# Extra codepoint used below: \U000F05E3 chart-bubble (Bubblers tile).
+# =============================================================================
+
+font:
+  - file: { type: gfonts, family: Roboto, weight: 700 }
+    id: font_clock
+    size: 40
+    bpp: 4
+    glyphs: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ":"]
+
+  - file: { type: gfonts, family: Roboto, weight: 700 }
+    id: font_brush
+    size: 44
+    bpp: 4
+    glyphs: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ":"]
+
+  - file: { type: gfonts, family: Roboto, weight: 700 }
+    id: font_temp
+    size: 22
+    bpp: 4
+    glyphs: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "-", ".", "°"]
+
+  - file: { type: gfonts, family: Roboto, weight: 700 }
+    id: font_chip
+    size: 11
+    bpp: 4
+    glyphs: ["S", "M", "T", "W", "F"]
+
+  - file: { type: gfonts, family: Roboto, weight: 700 }
+    id: font_title
+    size: 17
+    bpp: 4
+    glyphsets: [GF_Latin_Core]
+
+  - file: { type: gfonts, family: Roboto, weight: 400 }
+    id: font_body
+    size: 14
+    bpp: 4
+    glyphsets: [GF_Latin_Core]
+
+  - file: { type: gfonts, family: Roboto, weight: 400 }
+    id: font_label
+    size: 11
+    bpp: 4
+    glyphsets: [GF_Latin_Core]
+
+  - file: { type: gfonts, family: Roboto, weight: 400, italic: true }
+    id: font_quote
+    size: 13
+    bpp: 4
+    glyphsets: [GF_Latin_Core]
+
+  - file: &mdi "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/master/fonts/materialdesignicons-webfont.ttf"
+    id: font_icon_14
+    size: 14
+    bpp: 4
+    glyphs:
+      - "\U000F02E3"   # bed
+      - "\U000F0599"   # weather-sunny
+      - "\U000F0590"   # weather-cloudy
+      - "\U000F0597"   # weather-rainy
+      - "\U000F0594"   # weather-night
+      - "\U000F005C"   # arrow-top-right
+      - "\U000F0054"   # arrow-right
+      - "\U000F0043"   # arrow-bottom-right
+      - "\U000F0141"   # chevron-left
+
+  - file: *mdi
+    id: font_icon_22
+    size: 22
+    bpp: 4
+    glyphs:
+      - "\U000F078D"   # waves
+      - "\U000F0210"   # fan
+      - "\U000F0599"   # weather-sunny
+      - "\U000F058C"   # water
+      - "\U000F075A"   # music
+      - "\U000F050F"   # thermometer
+      - "\U000F1129"   # toothbrush
+      - "\U000F04AD"   # skip-next
+      - "\U000F04AE"   # skip-previous
+      - "\U000F057E"   # volume-high
+
+  - file: *mdi
+    id: font_icon_34
+    size: 34
+    bpp: 4
+    glyphs:
+      - "\U000F078D"   # waves
+      - "\U000F05E3"   # chart-bubble
+      - "\U000F040A"   # play
+      - "\U000F03E4"   # pause
+      - "\U000F075A"   # music
+
+  - file: *mdi
+    id: font_icon_54
+    size: 54
+    bpp: 4
+    glyphs:
+      - "\U000F0210"   # fan
+
+# =============================================================================
+# LVGL user interface  (320 x 240 landscape)
+#
+#   Home   header (clock / weekday strip / mode + timer buttons)
+#          middle zone: idle (temps + quote)  OR  media (Spotify)
+#          bottom nav: Pool | Fan
+#   Pool   air + water temps, Waterfall / Bubblers tile toggles
+#   Fan    one big round toggle
+#   Top layer: tooth-brushing countdown overlay
+# =============================================================================
+
+lvgl:
+  displays: [main_display]
+  touchscreens: [main_touch]
+  color_depth: 16
+  bg_color: c_bg
+  default_font: font_body
+  buffer_size: 25%
+
+  # Pool/Fan fall back to Home after a period with no touches.
+  on_idle:
+    timeout: ${page_timeout}
+    then:
+      - if:
+          condition:
+            not:
+              lvgl.page.is_showing: page_home
+          then:
+            - lvgl.page.show: page_home
+
+  style_definitions:
+    - id: style_card
+      bg_color: c_card
+      bg_opa: cover
+      radius: 10
+      border_width: 0
+      pad_all: 6
+    - id: style_surface
+      bg_color: c_card
+      bg_opa: cover
+      radius: 10
+      border_width: 0
+      pad_all: 0
+    - id: style_label
+      text_font: font_label
+      text_color: c_dim
+
+  # ---------------------------------------------------------------------------
+  # Tooth-brushing overlay — floats above every page.
+  # ---------------------------------------------------------------------------
+  top_layer:
+    widgets:
+      - obj:
+          id: overlay_brush
+          x: 0
+          y: 0
+          width: 320
+          height: 240
+          bg_color: c_bg
+          bg_opa: cover
+          border_width: 0
+          radius: 0
+          pad_all: 0
+          hidden: true
+          clickable: true
+          on_click:
+            - script.execute: script_brush_toggle
+          widgets:
+            - arc:
+                id: arc_brush
+                align: CENTER
+                y: -8
+                width: 158
+                height: 158
+                min_value: 0
+                max_value: 100
+                value: 0
+                start_angle: 270
+                end_angle: 270
+                adjustable: false
+                arc_width: 12
+                arc_color: c_card
+                indicator:
+                  arc_width: 12
+                  arc_color: c_accent
+            - label:
+                id: lbl_brush_time
+                align: CENTER
+                y: -20
+                text: "2:00"
+                text_font: font_brush
+                text_color: c_text
+            - label:
+                id: lbl_brush_sub
+                align: CENTER
+                y: 18
+                text: "Keep brushing!"
+                text_font: font_label
+                text_color: c_dim
+            - label:
+                align: BOTTOM_MID
+                y: -14
+                text: "Tap to cancel"
+                text_font: font_label
+                text_color: c_dimmer
+
+  pages:
+    # =========================================================================
+    # HOME
+    # =========================================================================
+    - id: page_home
+      bg_color: c_bg
+      bg_opa: cover
+      pad_all: 0
+      widgets:
+        # --- header -----------------------------------------------------
+        - label:
+            id: lbl_clock
+            x: 8
+            y: 0
+            text: "--:--"
+            text_font: font_clock
+            text_color: c_text
+        - label:
+            id: lbl_date
+            x: 11
+            y: 47
+            text: ""
+            text_font: font_label
+            text_color: c_dim
+
+        # weekday chips: S M T W T F S
+        - obj:
+            id: chip_0
+            x: 153
+            y: 6
+            width: 21
+            height: 20
+            styles: style_surface
+            widgets:
+              - label: { id: chip_lbl_0, align: CENTER, text: "S", text_font: font_chip, text_color: c_dimmer }
+        - obj:
+            id: chip_1
+            x: 176
+            y: 6
+            width: 21
+            height: 20
+            styles: style_surface
+            widgets:
+              - label: { id: chip_lbl_1, align: CENTER, text: "M", text_font: font_chip, text_color: c_dimmer }
+        - obj:
+            id: chip_2
+            x: 199
+            y: 6
+            width: 21
+            height: 20
+            styles: style_surface
+            widgets:
+              - label: { id: chip_lbl_2, align: CENTER, text: "T", text_font: font_chip, text_color: c_dimmer }
+        - obj:
+            id: chip_3
+            x: 222
+            y: 6
+            width: 21
+            height: 20
+            styles: style_surface
+            widgets:
+              - label: { id: chip_lbl_3, align: CENTER, text: "W", text_font: font_chip, text_color: c_dimmer }
+        - obj:
+            id: chip_4
+            x: 245
+            y: 6
+            width: 21
+            height: 20
+            styles: style_surface
+            widgets:
+              - label: { id: chip_lbl_4, align: CENTER, text: "T", text_font: font_chip, text_color: c_dimmer }
+        - obj:
+            id: chip_5
+            x: 268
+            y: 6
+            width: 21
+            height: 20
+            styles: style_surface
+            widgets:
+              - label: { id: chip_lbl_5, align: CENTER, text: "F", text_font: font_chip, text_color: c_dimmer }
+        - obj:
+            id: chip_6
+            x: 291
+            y: 6
+            width: 21
+            height: 20
+            styles: style_surface
+            widgets:
+              - label: { id: chip_lbl_6, align: CENTER, text: "S", text_font: font_chip, text_color: c_dimmer }
+
+        # manual idle <-> media override
+        - button:
+            id: btn_override
+            x: 252
+            y: 33
+            width: 28
+            height: 28
+            radius: 14
+            bg_color: c_card_hi
+            bg_opa: cover
+            border_width: 0
+            pad_all: 0
+            on_click:
+              - script.execute: script_click
+              - lambda: |-
+                  bool showing_media = id(g_manual_override) ? id(g_manual_media)
+                                                             : id(g_media_playing);
+                  id(g_manual_media) = !showing_media;
+                  id(g_manual_override) = true;
+              - script.execute: script_apply_mode
+              - script.execute: script_manual_hold
+            widgets:
+              - label:
+                  id: lbl_override_icon
+                  align: CENTER
+                  text: "\U000F075A"
+                  text_font: font_icon_22
+                  text_color: c_accent
+
+        # tooth-brushing timer
+        - button:
+            id: btn_brush
+            x: 284
+            y: 33
+            width: 28
+            height: 28
+            radius: 14
+            bg_color: c_card_hi
+            bg_opa: cover
+            border_width: 0
+            pad_all: 0
+            on_click:
+              - script.execute: script_click
+              - script.execute: script_brush_toggle
+            widgets:
+              - label:
+                  align: CENTER
+                  text: "\U000F1129"
+                  text_font: font_icon_22
+                  text_color: c_accent
+
+        # --- middle zone: IDLE ------------------------------------------
+        - obj:
+            id: cont_idle
+            x: 8
+            y: 70
+            width: 304
+            height: 118
+            bg_opa: transp
+            border_width: 0
+            pad_all: 0
+            widgets:
+              # indoor card
+              - obj:
+                  x: 0
+                  y: 0
+                  width: 104
+                  height: 56
+                  styles: style_card
+                  widgets:
+                    - label:
+                        align: TOP_LEFT
+                        text: "\U000F02E3"
+                        text_font: font_icon_14
+                        text_color: c_dim
+                    - label:
+                        x: 18
+                        y: 1
+                        text: "Caleb's room"
+                        styles: style_label
+                    - label:
+                        id: lbl_indoor_temp
+                        x: 2
+                        y: 18
+                        text: "--°"
+                        text_font: font_temp
+                        text_color: c_text
+                    - label:
+                        id: lbl_indoor_trend
+                        x: 56
+                        y: 26
+                        text: "\U000F0054"
+                        text_font: font_icon_14
+                        text_color: c_dim
+              # outdoor card
+              - obj:
+                  x: 0
+                  y: 62
+                  width: 104
+                  height: 56
+                  styles: style_card
+                  widgets:
+                    - label:
+                        x: 0
+                        y: 1
+                        text: "Outside"
+                        styles: style_label
+                    - label:
+                        id: lbl_outdoor_icon
+                        x: 0
+                        y: 16
+                        text: "\U000F0599"
+                        text_font: font_icon_22
+                        text_color: c_amber
+                    - label:
+                        id: lbl_outdoor_temp
+                        x: 28
+                        y: 18
+                        text: "--°"
+                        text_font: font_temp
+                        text_color: c_text
+                    - label:
+                        id: lbl_outdoor_trend
+                        x: 78
+                        y: 26
+                        text: "\U000F0054"
+                        text_font: font_icon_14
+                        text_color: c_dim
+              # joke / quote of the day
+              - label:
+                  id: lbl_quote
+                  x: 116
+                  y: 6
+                  width: 188
+                  height: 106
+                  text: ""
+                  text_font: font_quote
+                  text_color: c_text
+                  text_align: CENTER
+                  long_mode: wrap
+
+        # --- middle zone: MEDIA -----------------------------------------
+        - obj:
+            id: cont_media
+            x: 8
+            y: 70
+            width: 304
+            height: 118
+            bg_opa: transp
+            border_width: 0
+            pad_all: 0
+            hidden: true
+            widgets:
+              # album art placeholder (see README for online_image upgrade)
+              - obj:
+                  id: art_frame
+                  x: 0
+                  y: 8
+                  width: 96
+                  height: 96
+                  styles: style_surface
+                  widgets:
+                    - label:
+                        align: CENTER
+                        text: "\U000F075A"
+                        text_font: font_icon_34
+                        text_color: c_dimmer
+              - label:
+                  id: lbl_track
+                  x: 106
+                  y: 4
+                  width: 198
+                  text: "Nothing playing"
+                  text_font: font_body
+                  text_color: c_text
+                  long_mode: dot
+              - label:
+                  id: lbl_artist
+                  x: 106
+                  y: 25
+                  width: 198
+                  text: ""
+                  styles: style_label
+                  long_mode: dot
+              - button:
+                  id: btn_prev
+                  x: 106
+                  y: 48
+                  width: 40
+                  height: 40
+                  radius: 20
+                  bg_color: c_card
+                  bg_opa: cover
+                  border_width: 0
+                  pad_all: 0
+                  on_click:
+                    - script.execute: script_click
+                    - homeassistant.action:
+                        action: media_player.media_previous_track
+                        data:
+                          entity_id: ${ent_media_player}
+                  widgets:
+                    - label: { align: CENTER, text: "\U000F04AE", text_font: font_icon_22, text_color: c_text }
+              - button:
+                  id: btn_playpause
+                  x: 152
+                  y: 42
+                  width: 52
+                  height: 52
+                  radius: 26
+                  bg_color: c_accent
+                  bg_opa: cover
+                  border_width: 0
+                  pad_all: 0
+                  on_click:
+                    - script.execute: script_click
+                    - homeassistant.action:
+                        action: media_player.media_play_pause
+                        data:
+                          entity_id: ${ent_media_player}
+                  widgets:
+                    - label:
+                        id: lbl_playpause_icon
+                        align: CENTER
+                        text: "\U000F03E4"
+                        text_font: font_icon_34
+                        text_color: c_on_text
+              - button:
+                  id: btn_next
+                  x: 210
+                  y: 48
+                  width: 40
+                  height: 40
+                  radius: 20
+                  bg_color: c_card
+                  bg_opa: cover
+                  border_width: 0
+                  pad_all: 0
+                  on_click:
+                    - script.execute: script_click
+                    - homeassistant.action:
+                        action: media_player.media_next_track
+                        data:
+                          entity_id: ${ent_media_player}
+                  widgets:
+                    - label: { align: CENTER, text: "\U000F04AD", text_font: font_icon_22, text_color: c_text }
+              - label:
+                  x: 106
+                  y: 96
+                  text: "\U000F057E"
+                  text_font: font_icon_22
+                  text_color: c_dim
+              - slider:
+                  id: sld_volume
+                  x: 132
+                  y: 103
+                  width: 172
+                  height: 10
+                  min_value: 0
+                  max_value: 100
+                  value: 30
+                  bg_color: c_card
+                  indicator:
+                    bg_color: c_accent
+                  knob:
+                    bg_color: c_accent
+                    pad_all: 4
+                  on_value:
+                    - lambda: "id(g_volume_pending) = x / 100.0f;"
+                    - script.execute: script_send_volume
+
+        # --- bottom nav --------------------------------------------------
+        - button:
+            id: btn_nav_pool
+            x: 8
+            y: 194
+            width: 148
+            height: 42
+            radius: 10
+            bg_color: c_blue
+            bg_opa: cover
+            border_width: 0
+            pad_all: 0
+            on_click:
+              - script.execute: script_click
+              - lvgl.page.show: page_pool
+            widgets:
+              - label: { align: LEFT_MID, x: 36, text: "\U000F078D", text_font: font_icon_22, text_color: c_text }
+              - label: { align: LEFT_MID, x: 66, text: "Pool", text_font: font_title, text_color: c_text }
+        - button:
+            id: btn_nav_fan
+            x: 164
+            y: 194
+            width: 148
+            height: 42
+            radius: 10
+            bg_color: c_blue
+            bg_opa: cover
+            border_width: 0
+            pad_all: 0
+            on_click:
+              - script.execute: script_click
+              - lvgl.page.show: page_fan
+            widgets:
+              - label: { align: LEFT_MID, x: 40, text: "\U000F0210", text_font: font_icon_22, text_color: c_text }
+              - label: { align: LEFT_MID, x: 70, text: "Fan", text_font: font_title, text_color: c_text }
+
+    # =========================================================================
+    # POOL
+    # =========================================================================
+    - id: page_pool
+      bg_color: c_bg
+      bg_opa: cover
+      pad_all: 0
+      widgets:
+        - button:
+            id: btn_back_pool
+            x: 4
+            y: 4
+            width: 82
+            height: 28
+            radius: 8
+            bg_opa: transp
+            border_width: 0
+            pad_all: 0
+            on_click:
+              - script.execute: script_click
+              - lvgl.page.show: page_home
+            widgets:
+              - label: { align: LEFT_MID, x: 2, text: "\U000F0141", text_font: font_icon_14, text_color: c_dim }
+              - label: { align: LEFT_MID, x: 20, text: "Home", text_font: font_body, text_color: c_dim }
+        - label:
+            align: TOP_MID
+            x: -32
+            y: 7
+            text: "\U000F078D"
+            text_font: font_icon_22
+            text_color: c_accent
+        - label:
+            align: TOP_MID
+            x: 6
+            y: 9
+            text: "Pool"
+            text_font: font_title
+            text_color: c_text
+        - label:
+            id: lbl_pool_clock
+            align: TOP_RIGHT
+            x: -8
+            y: 10
+            text: "--:--"
+            text_font: font_body
+            text_color: c_dim
+
+        # read-only temperatures
+        - obj:
+            x: 8
+            y: 40
+            width: 148
+            height: 62
+            styles: style_card
+            widgets:
+              - label: { align: TOP_MID, y: 0, text: "Air", styles: style_label }
+              - label:
+                  align: BOTTOM_MID
+                  x: -26
+                  y: -2
+                  text: "\U000F0599"
+                  text_font: font_icon_22
+                  text_color: c_amber
+              - label:
+                  id: lbl_pool_air
+                  align: BOTTOM_MID
+                  x: 14
+                  y: 0
+                  text: "--°"
+                  text_font: font_temp
+                  text_color: c_text
+        - obj:
+            x: 164
+            y: 40
+            width: 148
+            height: 62
+            styles: style_card
+            widgets:
+              - label: { align: TOP_MID, y: 0, text: "Water", styles: style_label }
+              - label:
+                  align: BOTTOM_MID
+                  x: -26
+                  y: -2
+                  text: "\U000F058C"
+                  text_font: font_icon_22
+                  text_color: c_water
+              - label:
+                  id: lbl_pool_water
+                  align: BOTTOM_MID
+                  x: 14
+                  y: 0
+                  text: "--°"
+                  text_font: font_temp
+                  text_color: c_text
+
+        # whole-tile toggles
+        - obj:
+            id: tile_waterfall
+            x: 8
+            y: 110
+            width: 148
+            height: 122
+            styles: style_surface
+            clickable: true
+            on_click:
+              - script.execute: script_click
+              - homeassistant.action:
+                  action: switch.toggle
+                  data:
+                    entity_id: ${ent_pool_waterfall}
+            widgets:
+              - label:
+                  id: lbl_waterfall_icon
+                  align: TOP_LEFT
+                  x: 12
+                  y: 14
+                  text: "\U000F078D"
+                  text_font: font_icon_34
+                  text_color: c_dimmer
+              - label:
+                  id: lbl_waterfall_name
+                  align: BOTTOM_LEFT
+                  x: 12
+                  y: -28
+                  text: "Waterfall"
+                  text_font: font_title
+                  text_color: c_text
+              - label:
+                  id: lbl_waterfall_state
+                  align: BOTTOM_LEFT
+                  x: 12
+                  y: -10
+                  text: "--"
+                  text_font: font_label
+                  text_color: c_dim
+        - obj:
+            id: tile_bubblers
+            x: 164
+            y: 110
+            width: 148
+            height: 122
+            styles: style_surface
+            clickable: true
+            on_click:
+              - script.execute: script_click
+              - homeassistant.action:
+                  action: switch.toggle
+                  data:
+                    entity_id: ${ent_pool_bubblers}
+            widgets:
+              - label:
+                  id: lbl_bubblers_icon
+                  align: TOP_LEFT
+                  x: 12
+                  y: 14
+                  text: "\U000F05E3"
+                  text_font: font_icon_34
+                  text_color: c_dimmer
+              - label:
+                  id: lbl_bubblers_name
+                  align: BOTTOM_LEFT
+                  x: 12
+                  y: -28
+                  text: "Bubblers"
+                  text_font: font_title
+                  text_color: c_text
+              - label:
+                  id: lbl_bubblers_state
+                  align: BOTTOM_LEFT
+                  x: 12
+                  y: -10
+                  text: "--"
+                  text_font: font_label
+                  text_color: c_dim
+
+    # =========================================================================
+    # FAN
+    # =========================================================================
+    - id: page_fan
+      bg_color: c_bg
+      bg_opa: cover
+      pad_all: 0
+      widgets:
+        - button:
+            id: btn_back_fan
+            x: 4
+            y: 4
+            width: 82
+            height: 28
+            radius: 8
+            bg_opa: transp
+            border_width: 0
+            pad_all: 0
+            on_click:
+              - script.execute: script_click
+              - lvgl.page.show: page_home
+            widgets:
+              - label: { align: LEFT_MID, x: 2, text: "\U000F0141", text_font: font_icon_14, text_color: c_dim }
+              - label: { align: LEFT_MID, x: 20, text: "Home", text_font: font_body, text_color: c_dim }
+        - label:
+            align: TOP_MID
+            x: -62
+            y: 7
+            text: "\U000F0210"
+            text_font: font_icon_22
+            text_color: c_accent
+        - label:
+            align: TOP_MID
+            x: -24
+            y: 9
+            text: "Bedroom fan"
+            text_font: font_title
+            text_color: c_text
+        - label:
+            id: lbl_fan_clock
+            align: TOP_RIGHT
+            x: -8
+            y: 10
+            text: "--:--"
+            text_font: font_body
+            text_color: c_dim
+
+        - button:
+            id: btn_fan_toggle
+            align: TOP_MID
+            y: 54
+            width: 140
+            height: 140
+            radius: 70
+            bg_color: c_card
+            bg_opa: cover
+            border_width: 0
+            pad_all: 0
+            on_click:
+              - script.execute: script_click
+              - homeassistant.action:
+                  action: fan.toggle
+                  data:
+                    entity_id: ${ent_fan}
+            widgets:
+              - label:
+                  id: lbl_fan_icon
+                  align: CENTER
+                  y: -16
+                  text: "\U000F0210"
+                  text_font: font_icon_54
+                  text_color: c_dimmer
+              - label:
+                  id: lbl_fan_state
+                  align: CENTER
+                  y: 32
+                  text: "--"
+                  text_font: font_title
+                  text_color: c_dim
+        - label:
+            id: lbl_fan_hint
+            align: TOP_MID
+            y: 204
+            text: "Tap to turn on"
+            text_font: font_label
+            text_color: c_dimmer
+
+# =============================================================================
+# Scripts
+# =============================================================================
+
+script:
+  # Clock, date and the weekday strip. Runs on the minute and on SNTP sync.
+  - id: script_update_clock
+    mode: restart
+    then:
+      - lambda: |-
+          auto now = id(esptime).now();
+          if (!now.is_valid()) return;
+
+          int h = now.hour % 12;
+          if (h == 0) h = 12;
+          char t[8];
+          snprintf(t, sizeof(t), "%d:%02d", h, now.minute);
+          lv_label_set_text(id(lbl_clock), t);
+          lv_label_set_text(id(lbl_pool_clock), t);
+          lv_label_set_text(id(lbl_fan_clock), t);
+
+          static const char *MON[] = {"Jan","Feb","Mar","Apr","May","Jun",
+                                      "Jul","Aug","Sep","Oct","Nov","Dec"};
+          char d[16];
+          snprintf(d, sizeof(d), "%s %d", MON[now.month - 1], now.day_of_month);
+          lv_label_set_text(id(lbl_date), d);
+
+          lv_obj_t *chips[7] = {id(chip_0), id(chip_1), id(chip_2), id(chip_3),
+                                id(chip_4), id(chip_5), id(chip_6)};
+          lv_obj_t *marks[7] = {id(chip_lbl_0), id(chip_lbl_1), id(chip_lbl_2),
+                                id(chip_lbl_3), id(chip_lbl_4), id(chip_lbl_5),
+                                id(chip_lbl_6)};
+          int wd = now.day_of_week - 1;   // ESPHome day_of_week: 1 = Sunday
+          for (int i = 0; i < 7; i++) {
+            bool today = (i == wd);
+            lv_obj_set_style_bg_color(chips[i],
+                lv_color_hex(today ? 0x5DCAA5 : 0x262626), LV_PART_MAIN);
+            lv_obj_set_style_text_color(marks[i],
+                lv_color_hex(today ? 0x04342C : 0x6E6E6E), LV_PART_MAIN);
+          }
+
+  # Decide whether the middle zone shows temps+quote or Spotify.
+  - id: script_apply_mode
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: |-
+              return id(g_manual_override) ? id(g_manual_media)
+                                           : id(g_media_playing);
+          then:
+            - lvgl.widget.hide: cont_idle
+            - lvgl.widget.show: cont_media
+            - lvgl.label.update:
+                id: lbl_override_icon
+                text: "\U000F050F"        # thermometer -> back to idle
+          else:
+            - lvgl.widget.show: cont_idle
+            - lvgl.widget.hide: cont_media
+            - lvgl.label.update:
+                id: lbl_override_icon
+                text: "\U000F075A"        # music -> jump to media
+
+  # A manual tap pins the chosen mode; auto logic resumes afterwards.
+  - id: script_manual_hold
+    mode: restart
+    then:
+      - delay: ${manual_hold_time}
+      - lambda: "id(g_manual_override) = false;"
+      - script.execute: script_apply_mode
+
+  # Paused Spotify keeps media mode up for a while, then gives up.
+  - id: script_paused_grace
+    mode: restart
+    then:
+      - delay: ${paused_grace_time}
+      - lambda: "id(g_media_playing) = false;"
+      - script.execute: script_apply_mode
+
+  # Debounce the volume slider so a drag sends one service call.
+  - id: script_send_volume
+    mode: restart
+    then:
+      - delay: 400ms
+      - homeassistant.action:
+          action: media_player.volume_set
+          data:
+            entity_id: ${ent_media_player}
+          data_template:
+            volume_level: "{{ vol }}"
+          variables:
+            vol: "return id(g_volume_pending);"
+
+  # --- sounds ---------------------------------------------------------------
+  - id: script_click
+    mode: restart
+    then:
+      - if:
+          condition:
+            switch.is_off: sw_mute
+          then:
+            - rtttl.play: "click:d=32,o=7,b=280:c"
+
+  - id: script_chime
+    mode: restart
+    then:
+      - if:
+          condition:
+            switch.is_off: sw_mute
+          then:
+            - rtttl.play: "tick:d=16,o=6,b=160:e,g"
+
+  - id: script_brush_done
+    mode: restart
+    then:
+      - if:
+          condition:
+            switch.is_off: sw_mute
+          then:
+            - rtttl.play: "done:d=8,o=6,b=140:c,e,g,2c7"
+
+  # --- tooth-brushing timer -------------------------------------------------
+  - id: script_brush_toggle
+    mode: single
+    then:
+      - if:
+          condition:
+            lambda: "return id(g_brush_active);"
+          then:
+            - script.stop: script_brush_run
+            - lambda: "id(g_brush_active) = false;"
+            - lvgl.widget.hide: overlay_brush
+          else:
+            - script.execute: script_brush_run
+
+  - id: script_brush_run
+    mode: restart
+    then:
+      - lambda: |-
+          id(g_brush_active) = true;
+          id(g_brush_remaining) = ${brush_seconds};
+      - lvgl.label.update:
+          id: lbl_brush_sub
+          text: "Keep brushing!"
+      - lvgl.widget.show: overlay_brush
+      - while:
+          condition:
+            lambda: "return id(g_brush_remaining) > 0;"
+          then:
+            - lvgl.label.update:
+                id: lbl_brush_time
+                text: !lambda |-
+                  char b[8];
+                  int r = id(g_brush_remaining);
+                  snprintf(b, sizeof(b), "%d:%02d", r / 60, r % 60);
+                  return std::string(b);
+            - lvgl.arc.update:
+                id: arc_brush
+                value: !lambda |-
+                  const float total = ${brush_seconds};
+                  return 100.0f * (total - id(g_brush_remaining)) / total;
+            - delay: 1s
+            - lambda: "id(g_brush_remaining) -= 1;"
+            - if:
+                condition:
+                  lambda: |-
+                    return id(g_brush_remaining) > 0 &&
+                           (id(g_brush_remaining) % 30) == 0;
+                then:
+                  - script.execute: script_chime
+      - lvgl.label.update:
+          id: lbl_brush_time
+          text: "0:00"
+      - lvgl.arc.update:
+          id: arc_brush
+          value: 100
+      - lvgl.label.update:
+          id: lbl_brush_sub
+          text: "All done!"
+      - script.execute: script_brush_done
+      - delay: 3s
+      - lambda: "id(g_brush_active) = false;"
+      - lvgl.widget.hide: overlay_brush
+
+# =============================================================================
+# Home Assistant state -> screen
+# =============================================================================
+
+sensor:
+  - platform: homeassistant
+    id: ha_indoor_temp
+    entity_id: ${ent_indoor_temp}
+    on_value:
+      - lvgl.label.update:
+          id: lbl_indoor_temp
+          text: !lambda 'return str_sprintf("%.0f°", x);'
+
+  - platform: homeassistant
+    id: ha_outdoor_temp
+    entity_id: ${ent_outdoor_temp}
+    on_value:
+      - lvgl.label.update:
+          id: lbl_outdoor_temp
+          text: !lambda 'return str_sprintf("%.0f°", x);'
+
+  - platform: homeassistant
+    id: ha_pool_air
+    entity_id: ${ent_pool_air_temp}
+    on_value:
+      - lvgl.label.update:
+          id: lbl_pool_air
+          text: !lambda 'return str_sprintf("%.0f°", x);'
+
+  - platform: homeassistant
+    id: ha_pool_water
+    entity_id: ${ent_pool_water_temp}
+    on_value:
+      - lvgl.label.update:
+          id: lbl_pool_water
+          text: !lambda 'return str_sprintf("%.0f°", x);'
+
+  # lv_slider_set_value() does not emit VALUE_CHANGED, so this cannot loop
+  # back out as a volume_set call.
+  - platform: homeassistant
+    id: ha_media_volume
+    entity_id: ${ent_media_player}
+    attribute: volume_level
+    on_value:
+      - lvgl.slider.update:
+          id: sld_volume
+          value: !lambda "return x * 100.0f;"
+
+text_sensor:
+  - platform: homeassistant
+    id: ha_indoor_trend
+    entity_id: ${ent_indoor_trend}
+    on_value:
+      - lambda: |-
+          const char *icon = "\U000F0054";      // arrow-right / steady
+          uint32_t col = 0x9A9A9A;
+          if (x == "rising")       { icon = "\U000F005C"; col = 0xE8734A; }
+          else if (x == "falling") { icon = "\U000F0043"; col = 0x6FA8DC; }
+          lv_label_set_text(id(lbl_indoor_trend), icon);
+          lv_obj_set_style_text_color(id(lbl_indoor_trend),
+              lv_color_hex(col), LV_PART_MAIN);
+
+  - platform: homeassistant
+    id: ha_outdoor_trend
+    entity_id: ${ent_outdoor_trend}
+    on_value:
+      - lambda: |-
+          const char *icon = "\U000F0054";
+          uint32_t col = 0x9A9A9A;
+          if (x == "rising")       { icon = "\U000F005C"; col = 0xE8734A; }
+          else if (x == "falling") { icon = "\U000F0043"; col = 0x6FA8DC; }
+          lv_label_set_text(id(lbl_outdoor_trend), icon);
+          lv_obj_set_style_text_color(id(lbl_outdoor_trend),
+              lv_color_hex(col), LV_PART_MAIN);
+
+  - platform: homeassistant
+    id: ha_outdoor_condition
+    entity_id: ${ent_outdoor_condition}
+    on_value:
+      - lambda: |-
+          const char *icon = "\U000F0590";      // cloudy
+          uint32_t col = 0x9A9A9A;
+          if (x == "sunny")      { icon = "\U000F0599"; col = 0xF2B138; }
+          else if (x == "rain")  { icon = "\U000F0597"; col = 0x62B6E8; }
+          else if (x == "night") { icon = "\U000F0594"; col = 0xBFC7D5; }
+          lv_label_set_text(id(lbl_outdoor_icon), icon);
+          lv_obj_set_style_text_color(id(lbl_outdoor_icon),
+              lv_color_hex(col), LV_PART_MAIN);
+
+  - platform: homeassistant
+    id: ha_quote
+    entity_id: ${ent_daily_quote}
+    on_value:
+      - lvgl.label.update:
+          id: lbl_quote
+          text: !lambda "return x;"
+
+  - platform: homeassistant
+    id: ha_media_state
+    entity_id: ${ent_media_player}
+    on_value:
+      - lambda: |-
+          id(g_media_playing) = (x == "playing");
+          lv_label_set_text(id(lbl_playpause_icon),
+              x == "playing" ? "\U000F03E4" : "\U000F040A");
+      - if:
+          condition:
+            lambda: 'return x == "paused";'
+          then:
+            - lambda: "id(g_media_playing) = true;"
+            - script.execute: script_paused_grace
+          else:
+            - script.stop: script_paused_grace
+      - script.execute: script_apply_mode
+
+  - platform: homeassistant
+    id: ha_media_title
+    entity_id: ${ent_media_player}
+    attribute: media_title
+    on_value:
+      - lvgl.label.update:
+          id: lbl_track
+          text: !lambda 'return x.empty() ? std::string("Nothing playing") : x;'
+
+  - platform: homeassistant
+    id: ha_media_artist
+    entity_id: ${ent_media_player}
+    attribute: media_artist
+    on_value:
+      - lvgl.label.update:
+          id: lbl_artist
+          text: !lambda "return x;"
+
+binary_sensor:
+  - platform: homeassistant
+    id: ha_waterfall
+    entity_id: ${ent_pool_waterfall}
+    on_state:
+      - lambda: |-
+          bool on = x;
+          lv_obj_set_style_bg_color(id(tile_waterfall),
+              lv_color_hex(on ? 0x5DCAA5 : 0x1D1D1D), LV_PART_MAIN);
+          lv_obj_set_style_text_color(id(lbl_waterfall_icon),
+              lv_color_hex(on ? 0x04342C : 0x6E6E6E), LV_PART_MAIN);
+          lv_obj_set_style_text_color(id(lbl_waterfall_name),
+              lv_color_hex(on ? 0x04342C : 0xF2F2F2), LV_PART_MAIN);
+          lv_obj_set_style_text_color(id(lbl_waterfall_state),
+              lv_color_hex(on ? 0x04342C : 0x9A9A9A), LV_PART_MAIN);
+          lv_label_set_text(id(lbl_waterfall_state), on ? "On" : "Off");
+
+  - platform: homeassistant
+    id: ha_bubblers
+    entity_id: ${ent_pool_bubblers}
+    on_state:
+      - lambda: |-
+          bool on = x;
+          lv_obj_set_style_bg_color(id(tile_bubblers),
+              lv_color_hex(on ? 0x5DCAA5 : 0x1D1D1D), LV_PART_MAIN);
+          lv_obj_set_style_text_color(id(lbl_bubblers_icon),
+              lv_color_hex(on ? 0x04342C : 0x6E6E6E), LV_PART_MAIN);
+          lv_obj_set_style_text_color(id(lbl_bubblers_name),
+              lv_color_hex(on ? 0x04342C : 0xF2F2F2), LV_PART_MAIN);
+          lv_obj_set_style_text_color(id(lbl_bubblers_state),
+              lv_color_hex(on ? 0x04342C : 0x9A9A9A), LV_PART_MAIN);
+          lv_label_set_text(id(lbl_bubblers_state), on ? "On" : "Off");
+
+  - platform: homeassistant
+    id: ha_fan
+    entity_id: ${ent_fan}
+    on_state:
+      - lambda: |-
+          bool on = x;
+          lv_obj_set_style_bg_color(id(btn_fan_toggle),
+              lv_color_hex(on ? 0x5DCAA5 : 0x1D1D1D), LV_PART_MAIN);
+          lv_obj_set_style_text_color(id(lbl_fan_icon),
+              lv_color_hex(on ? 0x04342C : 0x6E6E6E), LV_PART_MAIN);
+          lv_obj_set_style_text_color(id(lbl_fan_state),
+              lv_color_hex(on ? 0x04342C : 0x9A9A9A), LV_PART_MAIN);
+          lv_label_set_text(id(lbl_fan_state), on ? "On" : "Off");
+          lv_label_set_text(id(lbl_fan_hint),
+              on ? "Tap to turn off" : "Tap to turn on");
+
+# =============================================================================
+# Panel-local controls exposed back to Home Assistant
+# =============================================================================
+
+switch:
+  - platform: template
+    id: sw_mute
+    name: "Panel sounds muted"
+    icon: "mdi:volume-off"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+button:
+  - platform: template
+    name: "Start brushing timer"
+    icon: "mdi:timer-sand"
+    on_press:
+      - script.execute: script_brush_toggle
+  - platform: restart
+    name: "Restart"

@@ -1,0 +1,172 @@
+# =============================================================================
+# Home Assistant package for the bathroom wall panel
+#
+# Install:
+#   1. mkdir -p <config>/packages
+#   2. copy this file to <config>/packages/bathroom_panel_package.yaml
+#   3. in configuration.yaml:
+#
+#        homeassistant:
+#          packages: !include_dir_named packages
+#
+#   4. Replace every source entity id marked  # <-- CHECK  with your real one,
+#      then Developer Tools -> YAML -> Restart.
+#
+# Provides:
+#   sensor.calebs_room_temperature_trend      rising | steady | falling
+#   sensor.ambient_outdoor_temperature_trend  rising | steady | falling
+#   sensor.outdoor_condition                  sunny | cloudy | rain | night
+#   sensor.panel_daily_quote                  today's joke or quote
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Temperature rate of change.
+#
+# unit_time: h means the derivative is °F per hour. The panel spec asked for a
+# ±0.5 °F deadband over a ~30 min window, which is ±1.0 °F/h — that is the
+# threshold used in the template sensors below.
+# -----------------------------------------------------------------------------
+sensor:
+  - platform: derivative
+    source: sensor.calebs_room_temperature            # <-- CHECK
+    name: "Caleb's room temperature derivative"
+    unique_id: calebs_room_temperature_derivative
+    unit_time: h
+    time_window: "00:30:00"
+    round: 2
+
+  - platform: derivative
+    source: sensor.ambient_outdoor_temperature        # <-- CHECK
+    name: "Outdoor temperature derivative"
+    unique_id: ambient_outdoor_temperature_derivative
+    unit_time: h
+    time_window: "00:30:00"
+    round: 2
+
+template:
+  - sensor:
+      # --- trend arrows -----------------------------------------------------
+      - name: "Caleb's room temperature trend"
+        unique_id: calebs_room_temperature_trend
+        state: >-
+          {% set d = states('sensor.calebs_room_temperature_derivative') | float(0) -%}
+          {{ 'rising' if d > 1.0 else ('falling' if d < -1.0 else 'steady') }}
+
+      - name: "Ambient outdoor temperature trend"
+        unique_id: ambient_outdoor_temperature_trend
+        state: >-
+          {% set d = states('sensor.ambient_outdoor_temperature_derivative') | float(0) -%}
+          {{ 'rising' if d > 1.0 else ('falling' if d < -1.0 else 'steady') }}
+
+      # --- weather icon driver ----------------------------------------------
+      # Rain wins, then darkness, then "is the sun actually hitting the
+      # station". 250 W/m2 is a reasonable sunny/overcast split; raise it if
+      # hazy days read as sunny.
+      - name: "Outdoor condition"
+        unique_id: outdoor_condition
+        state: >-
+          {% set rain  = states('sensor.ambient_hourly_rain_rate') | float(0) -%}
+          {% set solar = states('sensor.ambient_solar_radiation') | float(0) -%}
+          {{ 'rain'  if rain > 0
+             else ('night'  if is_state('sun.sun', 'below_horizon')
+             else ('sunny'  if solar > 250
+             else 'cloudy')) }}
+
+      # --- what the panel actually reads ------------------------------------
+      # Backed by the input_text below so the last good string survives a
+      # Home Assistant restart and the screen is never blank.
+      - name: "Panel daily quote"
+        unique_id: panel_daily_quote
+        state: >-
+          {% set v = states('input_text.panel_daily_quote') -%}
+          {{ v if v not in ['unknown', 'unavailable', ''] else 'Have a great day!' }}
+
+# -----------------------------------------------------------------------------
+# Daily joke / quote
+# -----------------------------------------------------------------------------
+input_text:
+  panel_daily_quote:
+    name: Panel daily quote
+    max: 255
+    icon: mdi:comment-quote
+
+rest_command:
+  # Family-safe by nature, no API key.
+  panel_fetch_joke:
+    url: "https://icanhazdadjoke.com/"
+    method: GET
+    headers:
+      Accept: "application/json"
+      User-Agent: "HomeAssistant bathroom panel (https://www.home-assistant.io)"
+    timeout: 15
+
+  # Alternative with an explicit family filter, if dad jokes wear thin:
+  #   url: "https://v2.jokeapi.dev/joke/Any?safe-mode&type=single"
+  #   -> response is {"joke": "..."}
+
+  panel_fetch_quote:
+    url: "https://zenquotes.io/api/random"
+    method: GET
+    timeout: 15
+
+automation:
+  - id: panel_daily_quote_refresh
+    alias: "Panel: refresh daily joke/quote"
+    description: >-
+      Odd days get a dad joke, even days an inspirational quote. Tries up to
+      three times and only overwrites the cached string on success, so a failed
+      fetch leaves yesterday's text on screen.
+    mode: single
+    max_exceeded: silent
+    trigger:
+      - platform: time
+        at: "05:30:00"
+      - platform: homeassistant
+        event: start
+      - platform: state
+        entity_id: input_text.panel_daily_quote
+        to: "unknown"
+    action:
+      - variables:
+          want_joke: "{{ now().day % 2 == 1 }}"
+          max_len: 110
+      - repeat:
+          count: 3
+          sequence:
+            - if:
+                - condition: template
+                  value_template: "{{ want_joke }}"
+              then:
+                - action: rest_command.panel_fetch_joke
+                  response_variable: resp
+                - variables:
+                    text: >-
+                      {{ (resp.content.joke | default('', true)) if resp.status == 200 else '' }}
+                - if:
+                    - condition: template
+                      value_template: "{{ text | length > 0 and text | length <= max_len }}"
+                  then:
+                    - action: input_text.set_value
+                      target:
+                        entity_id: input_text.panel_daily_quote
+                      data:
+                        value: "{{ text }}"
+                    - stop: "stored a joke"
+              else:
+                - action: rest_command.panel_fetch_quote
+                  response_variable: resp
+                - variables:
+                    text: >-
+                      {{ (resp.content[0].q ~ ' — ' ~ resp.content[0].a)
+                         if resp.status == 200 else '' }}
+                - if:
+                    - condition: template
+                      value_template: "{{ text | length > 0 and text | length <= max_len }}"
+                  then:
+                    - action: input_text.set_value
+                      target:
+                        entity_id: input_text.panel_daily_quote
+                      data:
+                        value: "{{ text }}"
+                    - stop: "stored a quote"
+            - delay: "00:00:10"
