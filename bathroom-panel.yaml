@@ -1,33 +1,38 @@
 # =============================================================================
 # Bathroom Wall Panel — ESPHome + LVGL
-# Hosyond ESP32-S3 3.5" touchscreen (240x320 IPS, capacitive touch)
-# Landscape: 320 wide x 240 tall
 #
-# EVERYTHING YOU NEED TO EDIT IS IN THE `substitutions:` BLOCK BELOW.
+# Board:   Elecrow DLE06235B, ESP32-S3
+# Display: ST77922 over QSPI, 320x480 native, run landscape as 480x320
+# Touch:   ST77922's own touch block, I2C 0x55 (custom component, see
+#          components/st77922_touch/)
 #
-# !! PINS AND DRIVER MODELS ARE PLACEHOLDERS !!
-# The Arduino sketch was not supplied, so the hardware block below is a
-# best guess for this class of board. Replace the pin / model / psram values
-# from the sketch before flashing. See README.md -> "Hardware to confirm".
+# Pins, driver model and the vendor init sequence were taken from the working
+# Arduino sketch and its esp_panel_board_custom_conf.h. The entity IDs marked
+# CHECK are still placeholders — see README.md.
 # =============================================================================
 
 substitutions:
   device_name: bathroom-panel
   friendly_name: "Bathroom Panel"
-  timezone: "America/Chicago"          # <-- set to your TZ database name
+  timezone: "America/Chicago"          # CST6CDT, matching the sketch
 
   # --- Home Assistant entities ------------------------------------------------
-  ent_indoor_temp:        sensor.calebs_room_temperature
+  # Confirmed present in the Arduino sketch:
+  ent_pool_waterfall:     switch.waterfall
+  ent_pool_bubblers:      switch.bubblers
+  ent_fan:                switch.master_fan
+  ent_fan_domain:         switch        # set to `fan` if you move to a fan entity
+  ent_fan_title:          "Bedroom fan"
+
+  # Still placeholders — replace with your real entity IDs:
+  ent_indoor_temp:        sensor.calebs_room_temperature      # CHECK
   ent_indoor_trend:       sensor.calebs_room_temperature_trend
-  ent_outdoor_temp:       sensor.ambient_outdoor_temperature
+  ent_outdoor_temp:       sensor.ambient_outdoor_temperature  # CHECK
   ent_outdoor_trend:      sensor.ambient_outdoor_temperature_trend
   ent_outdoor_condition:  sensor.outdoor_condition
-  ent_pool_air_temp:      sensor.ambient_outdoor_temperature
-  ent_pool_water_temp:    sensor.pool_water_temperature
-  ent_pool_waterfall:     switch.pool_waterfall
-  ent_pool_bubblers:      switch.pool_bubblers
-  ent_fan:                fan.master_bedroom_fan
-  ent_media_player:       media_player.spotify_caleb
+  ent_pool_air_temp:      sensor.ambient_outdoor_temperature  # CHECK
+  ent_pool_water_temp:    sensor.pool_water_temperature       # CHECK
+  ent_media_player:       media_player.spotify_caleb          # CHECK
   ent_daily_quote:        sensor.panel_daily_quote
 
   # --- Behaviour --------------------------------------------------------------
@@ -36,49 +41,56 @@ substitutions:
   paused_grace_time: "3min"   # how long media mode survives a pause
   brush_seconds:     "120"    # tooth-brushing timer length
 
-  # --- Hardware: display ------------------------------------------------------
-  # ili9xxx supports ST7789V / ILI9341 / ILI9488 etc. under one platform.
-  # 3.5" 240x320 IPS is most often ST7789V; if the sketch says otherwise,
-  # change this one line.
-  disp_model:   ST7789V
-  disp_invert:  "true"        # ST7789 IPS panels normally need inverted colors
-  pin_disp_sclk:  GPIO12
-  pin_disp_mosi:  GPIO11
-  pin_disp_miso:  GPIO13
+  # --- Hardware: display (QSPI) -----------------------------------------------
+  pin_disp_sck:   GPIO12
+  pin_disp_d0:    GPIO11
+  pin_disp_d1:    GPIO13
+  pin_disp_d2:    GPIO14
+  pin_disp_d3:    GPIO9
   pin_disp_cs:    GPIO10
-  pin_disp_dc:    GPIO9
-  pin_disp_rst:   GPIO14
-  pin_backlight:  GPIO21
+
+  # Shared LCD + touch reset, active low. Pulsed from on_boot, not from either
+  # component — see the note on the on_boot block below.
+  pin_panel_rst:  GPIO48
+
+  # Backlight is a plain on/off enable on this board (the vendor BSP declares
+  # it SWITCH_GPIO and the sketch drives it with digitalWrite), so it is a
+  # binary light rather than a PWM one.
+  pin_backlight:  GPIO41
 
   # --- Hardware: touch --------------------------------------------------------
   pin_touch_sda:  GPIO38
   pin_touch_scl:  GPIO39
-  pin_touch_int:  GPIO40
-  pin_touch_rst:  GPIO41
+  pin_touch_int:  GPIO47
 
   # --- Hardware: I2S speaker --------------------------------------------------
+  # !! UNVERIFIED !! The Arduino sketch contains no audio code at all, so these
+  # are guesses that avoid every pin the display and touch use. Wrong values
+  # mean silence, not damage, but confirm them against the board before
+  # trusting the brushing chimes. To drop audio entirely, delete the
+  # i2s_audio / speaker / rtttl blocks and the three sound scripts.
   pin_i2s_bclk:   GPIO42
   pin_i2s_lrclk:  GPIO2
   pin_i2s_dout:   GPIO1
 
   # --- Hardware: memory -------------------------------------------------------
   flash_size:  16MB
-  psram_mode:  octal           # `quad` on most 8MB-PSRAM S3 modules
+  psram_mode:  octal           # CHECK: `quad` on most 8MB-PSRAM S3 modules
 
 # =============================================================================
-# ICON GLYPH TABLE  (Material Design Icons)
-# If an icon renders as a blank box, look the name up at
-# https://pictogrammers.com/library/mdi/ and fix the codepoint here + below.
+# ICON GLYPH TABLE  (Material Design Icons, verified against the webfont's
+# _variables.scss — if one renders blank, look it up at
+# https://pictogrammers.com/library/mdi/)
 #
 #   \U000F0599  weather-sunny        \U000F0590  weather-cloudy
 #   \U000F0597  weather-rainy        \U000F0594  weather-night
 #   \U000F050F  thermometer          \U000F02E3  bed
-#   \U000F0210  fan                  \U000F0606  pool
-#   \U000F078D  waves                \U000F058C  water
+#   \U000F0210  fan                  \U000F078D  waves
+#   \U000F058C  water                \U000F05E3  chart-bubble
 #   \U000F075A  music                \U000F0141  chevron-left
 #   \U000F040A  play                 \U000F03E4  pause
 #   \U000F04AD  skip-next            \U000F04AE  skip-previous
-#   \U000F057E  volume-high          \U000F1129  toothbrush 
+#   \U000F057E  volume-high          \U000F1129  toothbrush
 #   \U000F005C  arrow-top-right      \U000F0054  arrow-right
 #   \U000F0043  arrow-bottom-right
 # =============================================================================
@@ -88,13 +100,22 @@ esphome:
   friendly_name: ${friendly_name}
   min_version: 2025.2.0
   on_boot:
-    priority: 600
-    then:
-      - light.turn_on:
-          id: backlight
-          brightness: 85%
-      - script.execute: script_update_clock
-      - script.execute: script_apply_mode
+    # GPIO48 resets the touch block and the LCD together. The vendor BSP wants
+    # it pulsed before the LCD is configured — doing it afterwards wipes the
+    # panel init. gpio outputs are set up at priority 800 and the display at
+    # 600, so 700 is the window where the pin exists but the panel has not been
+    # initialised yet.
+    - priority: 700
+      then:
+        - output.turn_off: panel_reset
+        - delay: 120ms
+        - output.turn_on: panel_reset
+        - delay: 200ms
+    - priority: 600
+      then:
+        - light.turn_on: backlight
+        - script.execute: script_update_clock
+        - script.execute: script_apply_mode
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -168,67 +189,140 @@ globals:
 # Hardware
 # =============================================================================
 
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [st77922_touch]
+
 spi:
   - id: bus_display
-    clk_pin: ${pin_disp_sclk}
-    mosi_pin: ${pin_disp_mosi}
-    miso_pin: ${pin_disp_miso}
+    type: quad
+    clk_pin: ${pin_disp_sck}
+    data_pins:
+      - ${pin_disp_d0}
+      - ${pin_disp_d1}
+      - ${pin_disp_d2}
+      - ${pin_disp_d3}
 
 i2c:
   - id: bus_touch
     sda: ${pin_touch_sda}
     scl: ${pin_touch_scl}
+    frequency: 100kHz
     scan: true
 
+output:
+  - platform: gpio
+    id: backlight_output
+    pin: ${pin_backlight}
+  - platform: gpio
+    id: panel_reset
+    pin: ${pin_panel_rst}
+
+light:
+  - platform: binary
+    id: backlight
+    name: "Backlight"
+    output: backlight_output
+    restore_mode: ALWAYS_ON
+
 display:
-  - platform: ili9xxx
+  - platform: mipi_spi
     id: main_display
+    model: CUSTOM
     spi_id: bus_display
-    model: ${disp_model}
+    bus_mode: quad
     cs_pin: ${pin_disp_cs}
-    dc_pin: ${pin_disp_dc}
-    reset_pin: ${pin_disp_rst}
-    invert_colors: ${disp_invert}
-    color_order: bgr
-    data_rate: 40MHz
-    dimensions:                 # native panel size, portrait
-      width: 240
+    data_rate: 80MHz
+    # Logical (post-transform) size. With explicit dimensions ESPHome uses
+    # these as given and does not swap them for swap_xy, so a 320x480 panel
+    # run landscape is declared 480x320 here.
+    dimensions:
+      width: 480
       height: 320
-    # Landscape. If the image is upside down flip mirror_x/mirror_y (and
-    # make the SAME change under touchscreen: transform:).
+    # Landscape. If the image is upside down, flip these — and make the
+    # identical change under touchscreen: transform:.
     transform:
       swap_xy: true
       mirror_x: true
       mirror_y: false
+    color_order: rgb
+    invert_colors: true         # the vendor sequence ends in INVON (0x21)
     # Both required when LVGL drives the display.
     auto_clear_enabled: false
     update_interval: never
+    # Ported from ESP_PANEL_BOARD_LCD_VENDOR_INIT_CMD() in the Arduino board
+    # config. Commands ESPHome issues itself were stripped: COLMOD (0x3A),
+    # MADCTL (0x36), INVON (0x21), SLPOUT (0x11), DISPON (0x29), and the
+    # per-draw window/write commands CASET/RASET/RAMWR (0x2A/0x2B/0x2C).
+    init_sequence:
+      - [0xF1, 0x00]
+      - [0x60, 0x00, 0x00, 0x00]
+      - [0x65, 0x80]
+      - [0x79, 0x06]
+      - [0x7B, 0x00, 0x08, 0x08]
+      - [0x80, 0x55, 0x62, 0x2F, 0x17, 0xF0, 0x52, 0x70, 0xD2, 0x52, 0x62, 0xEA]
+      - [0x81, 0x26, 0x52, 0x72, 0x27]
+      - [0x84, 0x92, 0x25]
+      - [0x87, 0x10, 0x10, 0x58, 0x00, 0x02, 0x3A]
+      - [0x88, 0x00, 0x00, 0x2C, 0x10, 0x04, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x06]
+      - [0x89, 0x00, 0x00, 0x00]
+      - [0x8A, 0x13, 0x00, 0x2C, 0x00, 0x00, 0x2C, 0x10, 0x10, 0x00, 0x3E, 0x19]
+      - [0x8B, 0x15, 0xB1, 0xB1, 0x44, 0x96, 0x2C, 0x10, 0x97, 0x8E]
+      - [0x8C, 0x1D, 0xB1, 0xB1, 0x44, 0x96, 0x2C, 0x10, 0x50, 0x0F, 0x01, 0xC5, 0x12, 0x09]
+      - [0x8D, 0x0C]
+      - [0x8E, 0x33, 0x01, 0x0C, 0x13, 0x01, 0x01]
+      - [0xB3, 0x00, 0x30]
+      - [0xF1, 0x00]
+      - [0x71, 0xC0]
+      - [0x66, 0x02, 0x3F]
+      - [0xBE, 0x24, 0x00, 0x9D]
+      - [0x70, 0x01, 0xA0, 0x11, 0x40, 0xE0, 0x00, 0x11, 0x69, 0x11, 0x00, 0x00, 0x1A]
+      - [0x90, 0x04, 0x04, 0x55, 0x74, 0x00, 0x40, 0x43, 0x27, 0x27]
+      - [0x91, 0x04, 0x04, 0x55, 0x75, 0x00, 0x40, 0x42, 0x27, 0x27]
+      - [0x92, 0x04, 0x44, 0x55, 0xC0, 0x06, 0x00, 0x07, 0x05, 0x90, 0x27]
+      - [0x93, 0x04, 0x43, 0x11, 0x00, 0x00, 0x00, 0x00, 0x05, 0x90, 0x27]
+      - [0x94, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+      - [0x95, 0x96, 0x16, 0x00, 0x00, 0xFF]
+      - [0x96, 0x44, 0x53, 0x03, 0x12, 0x23, 0x24, 0x06, 0x05, 0x94, 0x27, 0x00, 0x44]
+      - [0x97, 0x44, 0x53, 0x47, 0x56, 0x20, 0x20, 0x02, 0x01, 0x94, 0x27, 0x00, 0x44]
+      - [0xBA, 0x55, 0x94, 0x2D, 0x94, 0x27]
+      - [0x9A, 0x40, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00]
+      - [0x9B, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00]
+      - [0x9C, 0x5C, 0x12, 0x00, 0x00, 0x10, 0x12, 0x00, 0x00, 0x10, 0x02, 0x00, 0x00, 0x00]
+      - [0x9D, 0x8A, 0x51, 0x00, 0x00, 0x00, 0x80, 0x1E, 0x01]
+      - [0x9E, 0x51, 0x00, 0x00, 0x00, 0x80, 0x1E, 0x01]
+      - [0xB4, 0x1D, 0x1C, 0x1E, 0x0B, 0x14, 0x02, 0x13, 0x09, 0x1E, 0x00, 0x1E, 0x10]
+      - [0xB5, 0x1D, 0x1C, 0x1E, 0x0A, 0x15, 0x03, 0x11, 0x08, 0x1E, 0x01, 0x1E, 0x12]
+      - [0xB6, 0x77, 0x77, 0x00, 0x0A, 0xFF, 0x0A, 0xFF]
+      - [0x86, 0xCD, 0x04, 0xB1, 0x02, 0x58, 0x12, 0x58, 0x0C, 0x13, 0x01, 0xA5, 0x00, 0xA5, 0xA5]
+      - [0xB7, 0x07, 0x0A, 0x0E, 0x06, 0x05, 0x03, 0x2B, 0x03, 0x03, 0x42, 0x07, 0x10, 0x10, 0x2E, 0x3F, 0x0D]
+      - [0xB8, 0x07, 0x0A, 0x0D, 0x05, 0x05, 0x02, 0x2B, 0x02, 0x03, 0x42, 0x06, 0x10, 0x0F, 0x2E, 0x3F, 0x0D]
+      - [0xB9, 0x23, 0x23]
+      - [0xBF, 0x10, 0x14, 0x14, 0x0B, 0x0B, 0x0B]
+      - [0xF2, 0x00]
+      - [0x73, 0x04, 0xDA, 0x12, 0x54, 0x47]
+      - [0x77, 0x6B, 0x5B, 0xFD, 0xC3, 0xC5]
+      - [0x7A, 0x15, 0x27]
+      - [0x7B, 0x04, 0x57]
+      - [0x7E, 0x01, 0x0E]
+      - [0xBF, 0x36]
+      - [0xE3, 0x40, 0x40]
+      - [0xF0, 0x00]
+      - [0xD0, 0x00]
 
 touchscreen:
-  - platform: gt911              # swap for `ft63x6` if the sketch says FT6236
+  - platform: st77922_touch
     id: main_touch
     i2c_id: bus_touch
+    address: 0x55
     interrupt_pin: ${pin_touch_int}
-    reset_pin: ${pin_touch_rst}
     display: main_display
     transform:
       swap_xy: true
       mirror_x: true
       mirror_y: false
-
-output:
-  - platform: ledc
-    id: backlight_output
-    pin: ${pin_backlight}
-    frequency: 5000Hz
-
-light:
-  - platform: monochromatic
-    id: backlight
-    name: "Backlight"
-    output: backlight_output
-    restore_mode: ALWAYS_ON
-    default_transition_length: 250ms
 
 i2s_audio:
   - id: i2s_bus
@@ -244,7 +338,7 @@ speaker:
     channel: mono
     sample_rate: 16000
 
-# Tones are generated on-device, so no audio files to host.
+# Tones are generated on-device, so there are no audio files to host.
 rtttl:
   id: buzzer
   speaker: spk
@@ -282,65 +376,61 @@ color:
     hex: "6FA8DC"
 
 # =============================================================================
-# Fonts
-#
-# Text fonts pull Latin Core from Google Fonts (needs ESPHome >= 2024.11).
-# Icon fonts are Material Design Icons; see the glyph table at the top.
-# Extra codepoint used below: \U000F05E3 chart-bubble (Bubblers tile).
+# Fonts  (text fonts pull Latin Core from Google Fonts; icons are MDI)
 # =============================================================================
 
 font:
   - file: { type: gfonts, family: Roboto, weight: 700 }
     id: font_clock
-    size: 40
+    size: 56
     bpp: 4
     glyphs: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ":"]
 
   - file: { type: gfonts, family: Roboto, weight: 700 }
     id: font_brush
-    size: 44
+    size: 64
     bpp: 4
     glyphs: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ":"]
 
   - file: { type: gfonts, family: Roboto, weight: 700 }
     id: font_temp
-    size: 22
+    size: 30
     bpp: 4
     glyphs: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "-", ".", "°"]
 
   - file: { type: gfonts, family: Roboto, weight: 700 }
     id: font_chip
-    size: 11
+    size: 15
     bpp: 4
     glyphs: ["S", "M", "T", "W", "F"]
 
   - file: { type: gfonts, family: Roboto, weight: 700 }
     id: font_title
-    size: 17
+    size: 22
     bpp: 4
     glyphsets: [GF_Latin_Core]
 
   - file: { type: gfonts, family: Roboto, weight: 400 }
     id: font_body
-    size: 14
+    size: 18
     bpp: 4
     glyphsets: [GF_Latin_Core]
 
   - file: { type: gfonts, family: Roboto, weight: 400 }
     id: font_label
-    size: 11
+    size: 13
     bpp: 4
     glyphsets: [GF_Latin_Core]
 
   - file: { type: gfonts, family: Roboto, weight: 400, italic: true }
     id: font_quote
-    size: 13
+    size: 17
     bpp: 4
     glyphsets: [GF_Latin_Core]
 
   - file: &mdi "https://raw.githubusercontent.com/Templarian/MaterialDesign-Webfont/master/fonts/materialdesignicons-webfont.ttf"
-    id: font_icon_14
-    size: 14
+    id: font_icon_18
+    size: 18
     bpp: 4
     glyphs:
       - "\U000F02E3"   # bed
@@ -354,13 +444,16 @@ font:
       - "\U000F0141"   # chevron-left
 
   - file: *mdi
-    id: font_icon_22
-    size: 22
+    id: font_icon_30
+    size: 30
     bpp: 4
     glyphs:
       - "\U000F078D"   # waves
       - "\U000F0210"   # fan
       - "\U000F0599"   # weather-sunny
+      - "\U000F0590"   # weather-cloudy
+      - "\U000F0597"   # weather-rainy
+      - "\U000F0594"   # weather-night
       - "\U000F058C"   # water
       - "\U000F075A"   # music
       - "\U000F050F"   # thermometer
@@ -370,8 +463,8 @@ font:
       - "\U000F057E"   # volume-high
 
   - file: *mdi
-    id: font_icon_34
-    size: 34
+    id: font_icon_46
+    size: 46
     bpp: 4
     glyphs:
       - "\U000F078D"   # waves
@@ -381,21 +474,14 @@ font:
       - "\U000F075A"   # music
 
   - file: *mdi
-    id: font_icon_54
-    size: 54
+    id: font_icon_72
+    size: 72
     bpp: 4
     glyphs:
       - "\U000F0210"   # fan
 
 # =============================================================================
-# LVGL user interface  (320 x 240 landscape)
-#
-#   Home   header (clock / weekday strip / mode + timer buttons)
-#          middle zone: idle (temps + quote)  OR  media (Spotify)
-#          bottom nav: Pool | Fan
-#   Pool   air + water temps, Waterfall / Bubblers tile toggles
-#   Fan    one big round toggle
-#   Top layer: tooth-brushing countdown overlay
+# LVGL user interface  (480 x 320 landscape)
 # =============================================================================
 
 lvgl:
@@ -423,7 +509,7 @@ lvgl:
       bg_opa: cover
       radius: 10
       border_width: 0
-      pad_all: 6
+      pad_all: 8
     - id: style_surface
       bg_color: c_card
       bg_opa: cover
@@ -443,8 +529,8 @@ lvgl:
           id: overlay_brush
           x: 0
           y: 0
-          width: 320
-          height: 240
+          width: 480
+          height: 320
           bg_color: c_bg
           bg_opa: cover
           border_width: 0
@@ -458,37 +544,37 @@ lvgl:
             - arc:
                 id: arc_brush
                 align: CENTER
-                y: -8
-                width: 158
-                height: 158
+                y: -10
+                width: 214
+                height: 214
                 min_value: 0
                 max_value: 100
                 value: 0
                 start_angle: 270
                 end_angle: 270
                 adjustable: false
-                arc_width: 12
+                arc_width: 16
                 arc_color: c_card
                 indicator:
-                  arc_width: 12
+                  arc_width: 16
                   arc_color: c_accent
             - label:
                 id: lbl_brush_time
                 align: CENTER
-                y: -20
+                y: -26
                 text: "2:00"
                 text_font: font_brush
                 text_color: c_text
             - label:
                 id: lbl_brush_sub
                 align: CENTER
-                y: 18
+                y: 28
                 text: "Keep brushing!"
                 text_font: font_label
                 text_color: c_dim
             - label:
                 align: BOTTOM_MID
-                y: -14
+                y: -18
                 text: "Tap to cancel"
                 text_font: font_label
                 text_color: c_dimmer
@@ -505,92 +591,43 @@ lvgl:
         # --- header -----------------------------------------------------
         - label:
             id: lbl_clock
-            x: 8
-            y: 0
+            x: 12
+            y: 2
             text: "--:--"
             text_font: font_clock
             text_color: c_text
         - label:
             id: lbl_date
-            x: 11
-            y: 47
+            x: 16
+            y: 70
             text: ""
             text_font: font_label
             text_color: c_dim
 
         # weekday chips: S M T W T F S
-        - obj:
-            id: chip_0
-            x: 153
-            y: 6
-            width: 21
-            height: 20
-            styles: style_surface
-            widgets:
-              - label: { id: chip_lbl_0, align: CENTER, text: "S", text_font: font_chip, text_color: c_dimmer }
-        - obj:
-            id: chip_1
-            x: 176
-            y: 6
-            width: 21
-            height: 20
-            styles: style_surface
-            widgets:
-              - label: { id: chip_lbl_1, align: CENTER, text: "M", text_font: font_chip, text_color: c_dimmer }
-        - obj:
-            id: chip_2
-            x: 199
-            y: 6
-            width: 21
-            height: 20
-            styles: style_surface
-            widgets:
-              - label: { id: chip_lbl_2, align: CENTER, text: "T", text_font: font_chip, text_color: c_dimmer }
-        - obj:
-            id: chip_3
-            x: 222
-            y: 6
-            width: 21
-            height: 20
-            styles: style_surface
-            widgets:
-              - label: { id: chip_lbl_3, align: CENTER, text: "W", text_font: font_chip, text_color: c_dimmer }
-        - obj:
-            id: chip_4
-            x: 245
-            y: 6
-            width: 21
-            height: 20
-            styles: style_surface
-            widgets:
-              - label: { id: chip_lbl_4, align: CENTER, text: "T", text_font: font_chip, text_color: c_dimmer }
-        - obj:
-            id: chip_5
-            x: 268
-            y: 6
-            width: 21
-            height: 20
-            styles: style_surface
-            widgets:
-              - label: { id: chip_lbl_5, align: CENTER, text: "F", text_font: font_chip, text_color: c_dimmer }
-        - obj:
-            id: chip_6
-            x: 291
-            y: 6
-            width: 21
-            height: 20
-            styles: style_surface
-            widgets:
-              - label: { id: chip_lbl_6, align: CENTER, text: "S", text_font: font_chip, text_color: c_dimmer }
+        - obj: { id: chip_0, x: 234, y: 10, width: 30, height: 28, styles: style_surface,
+                 widgets: [ { label: { id: chip_lbl_0, align: CENTER, text: "S", text_font: font_chip, text_color: c_dimmer } } ] }
+        - obj: { id: chip_1, x: 268, y: 10, width: 30, height: 28, styles: style_surface,
+                 widgets: [ { label: { id: chip_lbl_1, align: CENTER, text: "M", text_font: font_chip, text_color: c_dimmer } } ] }
+        - obj: { id: chip_2, x: 302, y: 10, width: 30, height: 28, styles: style_surface,
+                 widgets: [ { label: { id: chip_lbl_2, align: CENTER, text: "T", text_font: font_chip, text_color: c_dimmer } } ] }
+        - obj: { id: chip_3, x: 336, y: 10, width: 30, height: 28, styles: style_surface,
+                 widgets: [ { label: { id: chip_lbl_3, align: CENTER, text: "W", text_font: font_chip, text_color: c_dimmer } } ] }
+        - obj: { id: chip_4, x: 370, y: 10, width: 30, height: 28, styles: style_surface,
+                 widgets: [ { label: { id: chip_lbl_4, align: CENTER, text: "T", text_font: font_chip, text_color: c_dimmer } } ] }
+        - obj: { id: chip_5, x: 404, y: 10, width: 30, height: 28, styles: style_surface,
+                 widgets: [ { label: { id: chip_lbl_5, align: CENTER, text: "F", text_font: font_chip, text_color: c_dimmer } } ] }
+        - obj: { id: chip_6, x: 438, y: 10, width: 30, height: 28, styles: style_surface,
+                 widgets: [ { label: { id: chip_lbl_6, align: CENTER, text: "S", text_font: font_chip, text_color: c_dimmer } } ] }
 
         # manual idle <-> media override
         - button:
             id: btn_override
-            x: 252
-            y: 33
-            width: 28
-            height: 28
-            radius: 14
+            x: 380
+            y: 52
+            width: 40
+            height: 40
+            radius: 20
             bg_color: c_card_hi
             bg_opa: cover
             border_width: 0
@@ -609,17 +646,17 @@ lvgl:
                   id: lbl_override_icon
                   align: CENTER
                   text: "\U000F075A"
-                  text_font: font_icon_22
+                  text_font: font_icon_30
                   text_color: c_accent
 
         # tooth-brushing timer
         - button:
             id: btn_brush
-            x: 284
-            y: 33
-            width: 28
-            height: 28
-            radius: 14
+            x: 428
+            y: 52
+            width: 40
+            height: 40
+            radius: 20
             bg_color: c_card_hi
             bg_opa: cover
             border_width: 0
@@ -631,93 +668,78 @@ lvgl:
               - label:
                   align: CENTER
                   text: "\U000F1129"
-                  text_font: font_icon_22
+                  text_font: font_icon_30
                   text_color: c_accent
 
         # --- middle zone: IDLE ------------------------------------------
         - obj:
             id: cont_idle
-            x: 8
-            y: 70
-            width: 304
-            height: 118
+            x: 12
+            y: 104
+            width: 456
+            height: 146
             bg_opa: transp
             border_width: 0
             pad_all: 0
             widgets:
-              # indoor card
               - obj:
                   x: 0
                   y: 0
-                  width: 104
-                  height: 56
+                  width: 150
+                  height: 70
                   styles: style_card
                   widgets:
-                    - label:
-                        align: TOP_LEFT
-                        text: "\U000F02E3"
-                        text_font: font_icon_14
-                        text_color: c_dim
-                    - label:
-                        x: 18
-                        y: 1
-                        text: "Caleb's room"
-                        styles: style_label
+                    - label: { align: TOP_LEFT, text: "\U000F02E3", text_font: font_icon_18, text_color: c_dim }
+                    - label: { x: 24, y: 3, text: "Caleb's room", styles: style_label }
                     - label:
                         id: lbl_indoor_temp
                         x: 2
-                        y: 18
+                        y: 22
                         text: "--°"
                         text_font: font_temp
                         text_color: c_text
                     - label:
                         id: lbl_indoor_trend
-                        x: 56
-                        y: 26
+                        x: 78
+                        y: 32
                         text: "\U000F0054"
-                        text_font: font_icon_14
+                        text_font: font_icon_18
                         text_color: c_dim
-              # outdoor card
               - obj:
                   x: 0
-                  y: 62
-                  width: 104
-                  height: 56
+                  y: 76
+                  width: 150
+                  height: 70
                   styles: style_card
                   widgets:
-                    - label:
-                        x: 0
-                        y: 1
-                        text: "Outside"
-                        styles: style_label
+                    - label: { x: 0, y: 3, text: "Outside", styles: style_label }
                     - label:
                         id: lbl_outdoor_icon
                         x: 0
-                        y: 16
+                        y: 20
                         text: "\U000F0599"
-                        text_font: font_icon_22
+                        text_font: font_icon_30
                         text_color: c_amber
                     - label:
                         id: lbl_outdoor_temp
-                        x: 28
-                        y: 18
+                        x: 38
+                        y: 22
                         text: "--°"
                         text_font: font_temp
                         text_color: c_text
                     - label:
                         id: lbl_outdoor_trend
-                        x: 78
-                        y: 26
+                        x: 110
+                        y: 32
                         text: "\U000F0054"
-                        text_font: font_icon_14
+                        text_font: font_icon_18
                         text_color: c_dim
-              # joke / quote of the day
               - label:
                   id: lbl_quote
-                  x: 116
+                  x: 166
                   y: 6
-                  width: 188
-                  height: 106
+                  width: 290
+                  height: 134
                   text: ""
                   text_font: font_quote
                   text_color: c_text
@@ -727,53 +749,49 @@ lvgl:
         # --- middle zone: MEDIA -----------------------------------------
         - obj:
             id: cont_media
-            x: 8
-            y: 70
-            width: 304
-            height: 118
+            x: 12
+            y: 104
+            width: 456
+            height: 146
             bg_opa: transp
             border_width: 0
             pad_all: 0
             hidden: true
             widgets:
-              # album art placeholder (see README for online_image upgrade)
+              # album art placeholder (see README for the online_image upgrade)
               - obj:
                   id: art_frame
                   x: 0
-                  y: 8
-                  width: 96
-                  height: 96
+                  y: 9
+                  width: 128
+                  height: 128
                   styles: style_surface
                   widgets:
-                    - label:
-                        align: CENTER
-                        text: "\U000F075A"
-                        text_font: font_icon_34
-                        text_color: c_dimmer
+                    - label: { align: CENTER, text: "\U000F075A", text_font: font_icon_46, text_color: c_dimmer }
               - label:
                   id: lbl_track
-                  x: 106
+                  x: 142
                   y: 4
-                  width: 198
+                  width: 314
                   text: "Nothing playing"
                   text_font: font_body
                   text_color: c_text
                   long_mode: dot
               - label:
                   id: lbl_artist
-                  x: 106
-                  y: 25
-                  width: 198
+                  x: 142
+                  y: 30
+                  width: 314
                   text: ""
                   styles: style_label
                   long_mode: dot
               - button:
                   id: btn_prev
-                  x: 106
-                  y: 48
-                  width: 40
-                  height: 40
-                  radius: 20
+                  x: 197
+                  y: 62
+                  width: 56
+                  height: 56
+                  radius: 28
                   bg_color: c_card
                   bg_opa: cover
                   border_width: 0
@@ -785,14 +803,14 @@ lvgl:
                         data:
                           entity_id: ${ent_media_player}
                   widgets:
-                    - label: { align: CENTER, text: "\U000F04AE", text_font: font_icon_22, text_color: c_text }
+                    - label: { align: CENTER, text: "\U000F04AE", text_font: font_icon_30, text_color: c_text }
               - button:
                   id: btn_playpause
-                  x: 152
-                  y: 42
-                  width: 52
-                  height: 52
-                  radius: 26
+                  x: 263
+                  y: 54
+                  width: 72
+                  height: 72
+                  radius: 36
                   bg_color: c_accent
                   bg_opa: cover
                   border_width: 0
@@ -808,15 +826,15 @@ lvgl:
                         id: lbl_playpause_icon
                         align: CENTER
                         text: "\U000F03E4"
-                        text_font: font_icon_34
+                        text_font: font_icon_46
                         text_color: c_on_text
               - button:
                   id: btn_next
-                  x: 210
-                  y: 48
-                  width: 40
-                  height: 40
-                  radius: 20
+                  x: 345
+                  y: 62
+                  width: 56
+                  height: 56
+                  radius: 28
                   bg_color: c_card
                   bg_opa: cover
                   border_width: 0
@@ -828,19 +846,19 @@ lvgl:
                         data:
                           entity_id: ${ent_media_player}
                   widgets:
-                    - label: { align: CENTER, text: "\U000F04AD", text_font: font_icon_22, text_color: c_text }
+                    - label: { align: CENTER, text: "\U000F04AD", text_font: font_icon_30, text_color: c_text }
               - label:
-                  x: 106
-                  y: 96
+                  x: 142
+                  y: 122
                   text: "\U000F057E"
-                  text_font: font_icon_22
+                  text_font: font_icon_30
                   text_color: c_dim
               - slider:
                   id: sld_volume
-                  x: 132
-                  y: 103
-                  width: 172
-                  height: 10
+                  x: 178
+                  y: 130
+                  width: 278
+                  height: 12
                   min_value: 0
                   max_value: 100
                   value: 30
@@ -849,7 +867,7 @@ lvgl:
                     bg_color: c_accent
                   knob:
                     bg_color: c_accent
-                    pad_all: 4
+                    pad_all: 6
                   on_value:
                     - lambda: "id(g_volume_pending) = x / 100.0f;"
                     - script.execute: script_send_volume
@@ -857,10 +875,10 @@ lvgl:
         # --- bottom nav --------------------------------------------------
         - button:
             id: btn_nav_pool
-            x: 8
-            y: 194
-            width: 148
-            height: 42
+            x: 12
+            y: 258
+            width: 222
+            height: 54
             radius: 10
             bg_color: c_blue
             bg_opa: cover
@@ -870,14 +888,14 @@ lvgl:
               - script.execute: script_click
               - lvgl.page.show: page_pool
             widgets:
-              - label: { align: LEFT_MID, x: 36, text: "\U000F078D", text_font: font_icon_22, text_color: c_text }
-              - label: { align: LEFT_MID, x: 66, text: "Pool", text_font: font_title, text_color: c_text }
+              - label: { align: LEFT_MID, x: 54, text: "\U000F078D", text_font: font_icon_30, text_color: c_text }
+              - label: { align: LEFT_MID, x: 94, text: "Pool", text_font: font_title, text_color: c_text }
         - button:
             id: btn_nav_fan
-            x: 164
-            y: 194
-            width: 148
-            height: 42
+            x: 246
+            y: 258
+            width: 222
+            height: 54
             radius: 10
             bg_color: c_blue
             bg_opa: cover
@@ -887,8 +905,8 @@ lvgl:
               - script.execute: script_click
               - lvgl.page.show: page_fan
             widgets:
-              - label: { align: LEFT_MID, x: 40, text: "\U000F0210", text_font: font_icon_22, text_color: c_text }
-              - label: { align: LEFT_MID, x: 70, text: "Fan", text_font: font_title, text_color: c_text }
+              - label: { align: LEFT_MID, x: 62, text: "\U000F0210", text_font: font_icon_30, text_color: c_text }
+              - label: { align: LEFT_MID, x: 102, text: "Fan", text_font: font_title, text_color: c_text }
 
     # =========================================================================
     # POOL
@@ -900,10 +918,10 @@ lvgl:
       widgets:
         - button:
             id: btn_back_pool
-            x: 4
-            y: 4
-            width: 82
-            height: 28
+            x: 6
+            y: 6
+            width: 110
+            height: 34
             radius: 8
             bg_opa: transp
             border_width: 0
@@ -912,74 +930,74 @@ lvgl:
               - script.execute: script_click
               - lvgl.page.show: page_home
             widgets:
-              - label: { align: LEFT_MID, x: 2, text: "\U000F0141", text_font: font_icon_14, text_color: c_dim }
-              - label: { align: LEFT_MID, x: 20, text: "Home", text_font: font_body, text_color: c_dim }
+              - label: { align: LEFT_MID, x: 4, text: "\U000F0141", text_font: font_icon_18, text_color: c_dim }
+              - label: { align: LEFT_MID, x: 26, text: "Home", text_font: font_body, text_color: c_dim }
         - label:
             align: TOP_MID
-            x: -32
-            y: 7
+            x: -44
+            y: 9
             text: "\U000F078D"
-            text_font: font_icon_22
+            text_font: font_icon_30
             text_color: c_accent
         - label:
             align: TOP_MID
-            x: 6
-            y: 9
+            x: 0
+            y: 11
             text: "Pool"
             text_font: font_title
             text_color: c_text
         - label:
             id: lbl_pool_clock
             align: TOP_RIGHT
-            x: -8
-            y: 10
+            x: -12
+            y: 13
             text: "--:--"
             text_font: font_body
             text_color: c_dim
 
         # read-only temperatures
         - obj:
-            x: 8
-            y: 40
-            width: 148
-            height: 62
+            x: 12
+            y: 54
+            width: 222
+            height: 84
             styles: style_card
             widgets:
-              - label: { align: TOP_MID, y: 0, text: "Air", styles: style_label }
+              - label: { align: TOP_MID, y: 2, text: "Air", styles: style_label }
               - label:
                   align: BOTTOM_MID
-                  x: -26
-                  y: -2
+                  x: -40
+                  y: -4
                   text: "\U000F0599"
-                  text_font: font_icon_22
+                  text_font: font_icon_30
                   text_color: c_amber
               - label:
                   id: lbl_pool_air
                   align: BOTTOM_MID
-                  x: 14
+                  x: 18
                   y: 0
                   text: "--°"
                   text_font: font_temp
                   text_color: c_text
         - obj:
-            x: 164
-            y: 40
-            width: 148
-            height: 62
+            x: 246
+            y: 54
+            width: 222
+            height: 84
             styles: style_card
             widgets:
-              - label: { align: TOP_MID, y: 0, text: "Water", styles: style_label }
+              - label: { align: TOP_MID, y: 2, text: "Water", styles: style_label }
               - label:
                   align: BOTTOM_MID
-                  x: -26
-                  y: -2
+                  x: -40
+                  y: -4
                   text: "\U000F058C"
-                  text_font: font_icon_22
+                  text_font: font_icon_30
                   text_color: c_water
               - label:
                   id: lbl_pool_water
                   align: BOTTOM_MID
-                  x: 14
+                  x: 18
                   y: 0
                   text: "--°"
                   text_font: font_temp
@@ -988,10 +1006,10 @@ lvgl:
         # whole-tile toggles
         - obj:
             id: tile_waterfall
-            x: 8
-            y: 110
-            width: 148
-            height: 122
+            x: 12
+            y: 148
+            width: 222
+            height: 160
             styles: style_surface
             clickable: true
             on_click:
@@ -1004,33 +1022,33 @@ lvgl:
               - label:
                   id: lbl_waterfall_icon
                   align: TOP_LEFT
-                  x: 12
-                  y: 14
+                  x: 18
+                  y: 20
                   text: "\U000F078D"
-                  text_font: font_icon_34
+                  text_font: font_icon_46
                   text_color: c_dimmer
               - label:
                   id: lbl_waterfall_name
                   align: BOTTOM_LEFT
-                  x: 12
-                  y: -28
+                  x: 18
+                  y: -38
                   text: "Waterfall"
                   text_font: font_title
                   text_color: c_text
               - label:
                   id: lbl_waterfall_state
                   align: BOTTOM_LEFT
-                  x: 12
-                  y: -10
+                  x: 18
+                  y: -14
                   text: "--"
                   text_font: font_label
                   text_color: c_dim
         - obj:
             id: tile_bubblers
-            x: 164
-            y: 110
-            width: 148
-            height: 122
+            x: 246
+            y: 148
+            width: 222
+            height: 160
             styles: style_surface
             clickable: true
             on_click:
@@ -1043,24 +1061,24 @@ lvgl:
               - label:
                   id: lbl_bubblers_icon
                   align: TOP_LEFT
-                  x: 12
-                  y: 14
+                  x: 18
+                  y: 20
                   text: "\U000F05E3"
-                  text_font: font_icon_34
+                  text_font: font_icon_46
                   text_color: c_dimmer
               - label:
                   id: lbl_bubblers_name
                   align: BOTTOM_LEFT
-                  x: 12
-                  y: -28
+                  x: 18
+                  y: -38
                   text: "Bubblers"
                   text_font: font_title
                   text_color: c_text
               - label:
                   id: lbl_bubblers_state
                   align: BOTTOM_LEFT
-                  x: 12
-                  y: -10
+                  x: 18
+                  y: -14
                   text: "--"
                   text_font: font_label
                   text_color: c_dim
@@ -1075,10 +1093,10 @@ lvgl:
       widgets:
         - button:
             id: btn_back_fan
-            x: 4
-            y: 4
-            width: 82
-            height: 28
+            x: 6
+            y: 6
+            width: 110
+            height: 34
             radius: 8
             bg_opa: transp
             border_width: 0
@@ -1087,27 +1105,27 @@ lvgl:
               - script.execute: script_click
               - lvgl.page.show: page_home
             widgets:
-              - label: { align: LEFT_MID, x: 2, text: "\U000F0141", text_font: font_icon_14, text_color: c_dim }
-              - label: { align: LEFT_MID, x: 20, text: "Home", text_font: font_body, text_color: c_dim }
+              - label: { align: LEFT_MID, x: 4, text: "\U000F0141", text_font: font_icon_18, text_color: c_dim }
+              - label: { align: LEFT_MID, x: 26, text: "Home", text_font: font_body, text_color: c_dim }
         - label:
             align: TOP_MID
-            x: -62
-            y: 7
+            x: -92
+            y: 9
             text: "\U000F0210"
-            text_font: font_icon_22
+            text_font: font_icon_30
             text_color: c_accent
         - label:
             align: TOP_MID
-            x: -24
-            y: 9
-            text: "Bedroom fan"
+            x: -6
+            y: 11
+            text: "${ent_fan_title}"
             text_font: font_title
             text_color: c_text
         - label:
             id: lbl_fan_clock
             align: TOP_RIGHT
-            x: -8
-            y: 10
+            x: -12
+            y: 13
             text: "--:--"
             text_font: font_body
             text_color: c_dim
@@ -1115,10 +1133,10 @@ lvgl:
         - button:
             id: btn_fan_toggle
             align: TOP_MID
-            y: 54
-            width: 140
-            height: 140
-            radius: 70
+            y: 62
+            width: 190
+            height: 190
+            radius: 95
             bg_color: c_card
             bg_opa: cover
             border_width: 0
@@ -1126,28 +1144,28 @@ lvgl:
             on_click:
               - script.execute: script_click
               - homeassistant.action:
-                  action: fan.toggle
+                  action: ${ent_fan_domain}.toggle
                   data:
                     entity_id: ${ent_fan}
             widgets:
               - label:
                   id: lbl_fan_icon
                   align: CENTER
-                  y: -16
+                  y: -22
                   text: "\U000F0210"
-                  text_font: font_icon_54
+                  text_font: font_icon_72
                   text_color: c_dimmer
               - label:
                   id: lbl_fan_state
                   align: CENTER
-                  y: 32
+                  y: 44
                   text: "--"
                   text_font: font_title
                   text_color: c_dim
         - label:
             id: lbl_fan_hint
             align: TOP_MID
-            y: 204
+            y: 266
             text: "Tap to turn on"
             text_font: font_label
             text_color: c_dimmer
@@ -1533,7 +1551,7 @@ switch:
 button:
   - platform: template
     name: "Start brushing timer"
-    icon: "mdi:timer-sand"
+    icon: "mdi:toothbrush"
     on_press:
       - script.execute: script_brush_toggle
   - platform: restart
