@@ -104,22 +104,17 @@ Three came straight out of the sketch and are already correct:
 | --- | --- |
 | `ent_pool_waterfall` | `switch.waterfall` |
 | `ent_pool_bubblers` | `switch.bubblers` |
-| `ent_fan` | `switch.master_fan` |
+| `ent_fan` | `switch.calebs_fan` |
 
 The rest are still placeholders, marked `# CHECK` in the substitutions block:
 the two room temperatures, pool water temperature, and the Spotify player.
 
-Two judgement calls to confirm:
-
-* **The fan is a `switch`, not a `fan`.** The handoff note asked for
-  `fan.master_bedroom_fan`, but the sketch only ever talks to
-  `switch.master_fan`, so that is what the Fan page toggles. If you do have a
-  `fan.` entity, change `ent_fan` and set `ent_fan_domain: fan` — the page calls
-  `${ent_fan_domain}.toggle`.
-* **Which fan?** `switch.master_fan` is the master bedroom, per the handoff
-  note. The sketch also has `switch.calebs_fan`, which may be the one an
-  11-year-old actually wants from his own bathroom. Change `ent_fan` and
-  `ent_fan_title` if so.
+**The fan is a `switch`, not a `fan`.** The handoff note asked for
+`fan.master_bedroom_fan`, but the sketch only ever talks to switch entities. The
+Fan page points at `switch.calebs_fan` — Caleb's own room rather than the master
+bedroom the note named — and is titled from `ent_fan_title`. If a `fan.` entity
+turns up later, change `ent_fan` and set `ent_fan_domain: fan`; the page calls
+`${ent_fan_domain}.toggle`, so that is the whole change.
 
 ## Setup
 
@@ -232,4 +227,3 @@ A JokeAPI URL with `safe-mode` is in the package as a commented alternative.
   volume control both require Premium — without it the buttons will 403 and the
   panel has no way to show that.
 * The I²S speaker pins, per **Still unverified** above.
-* Whether the Fan page should point at the master bedroom or Caleb's room.

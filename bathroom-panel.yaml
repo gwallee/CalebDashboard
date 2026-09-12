@@ -20,9 +20,9 @@ substitutions:
   # Confirmed present in the Arduino sketch:
   ent_pool_waterfall:     switch.waterfall
   ent_pool_bubblers:      switch.bubblers
-  ent_fan:                switch.master_fan
+  ent_fan:                switch.calebs_fan
   ent_fan_domain:         switch        # set to `fan` if you move to a fan entity
-  ent_fan_title:          "Bedroom fan"
+  ent_fan_title:          "Caleb's fan"
 
   # Still placeholders — replace with your real entity IDs:
   ent_indoor_temp:        sensor.calebs_room_temperature      # CHECK
