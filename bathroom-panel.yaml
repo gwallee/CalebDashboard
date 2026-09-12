@@ -128,7 +128,11 @@ psram:
   speed: 80MHz
 
 logger:
-  level: INFO
+  # DEBUG for bring-up. dump_config() logs at CONFIG level, which is more
+  # verbose than INFO, so INFO silently hides the boot-time dump of every
+  # component's resolved settings — including whether the touch controller
+  # answered. Drop to INFO once the panel is behaving.
+  level: DEBUG
 
 api:
   encryption:
