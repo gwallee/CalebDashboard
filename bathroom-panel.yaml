@@ -194,10 +194,25 @@ globals:
 # =============================================================================
 
 external_components:
+  # Local: components/ sits next to this file, so the whole directory has to be
+  # copied into the ESPHome config dir alongside the YAML.
   - source:
       type: local
       path: components
     components: [st77922_touch]
+
+  # Remote alternative: pull the touch driver straight from GitHub, so this
+  # YAML is the only file ESPHome needs locally. Comment out the block above
+  # and uncomment this one. The repo is public, so no credentials are involved.
+  # `refresh` is how long ESPHome caches the clone before re-fetching -- set it
+  # to 0s while you are iterating on the driver, or you will keep building a
+  # stale copy.
+  # - source:
+  #     type: git
+  #     url: https://github.com/gwallee/CalebDashboard
+  #     ref: claude/test-sgpvp8
+  #   refresh: 1d
+  #   components: [st77922_touch]
 
 spi:
   - id: bus_display
