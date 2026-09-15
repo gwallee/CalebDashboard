@@ -51,12 +51,18 @@ template:
         state: >-
           {% set d = states('sensor.calebs_room_temperature_derivative') | float(0) -%}
           {{ 'rising' if d > 1.0 else ('falling' if d < -1.0 else 'steady') }}
+        # Without this a missing source sensor floats to 0 and reads as a
+        # confident "steady" -- an arrow that looks right and means nothing.
+        availability: "{{ has_value('sensor.calebs_room_temperature_derivative') }}"
 
       - name: "Ambient outdoor temperature trend"
         unique_id: ambient_outdoor_temperature_trend
         state: >-
           {% set d = states('sensor.ambient_outdoor_temperature_derivative') | float(0) -%}
           {{ 'rising' if d > 1.0 else ('falling' if d < -1.0 else 'steady') }}
+        # Without this a missing source sensor floats to 0 and reads as a
+        # confident "steady" -- an arrow that looks right and means nothing.
+        availability: "{{ has_value('sensor.ambient_outdoor_temperature_derivative') }}"
 
       # --- weather icon driver ----------------------------------------------
       # Rain wins, then darkness, then "is the sun actually hitting the
@@ -71,6 +77,11 @@ template:
              else ('night'  if is_state('sun.sun', 'below_horizon')
              else ('sunny'  if solar > 250
              else 'cloudy')) }}
+        # Same reasoning: no station data should read as unavailable, not as
+        # a cloudy day.
+        availability: >-
+          {{ has_value('sensor.ambient_hourly_rain_rate')
+             and has_value('sensor.ambient_solar_radiation') }}
 
       # --- what the panel actually reads ------------------------------------
       # Backed by the input_text below so the last good string survives a
