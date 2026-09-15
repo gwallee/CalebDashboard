@@ -1,3 +1,133 @@
+# Task: find the entity IDs for the bathroom wall panel, and set up its helpers
+
+You have Home Assistant access over MCP. I do not — that is why this is being
+handed to you.
+
+I am building an ESPHome wall panel for a bathroom. Its firmware reads a
+handful of Home Assistant entities, but five of them are still **guesses**
+written by someone who could not see this HA instance. Your job is to find the
+real ones and produce a filled-in configuration.
+
+**Do not guess.** If you cannot find a confident match for something, say so
+and leave it marked. A wrong entity ID here fails silently — the panel shows a
+plausible-looking number or arrow that means nothing, which is far worse than
+an obvious blank.
+
+---
+
+## Part 1 — Find these five entities
+
+| # | What it is | Current guess | Used by the panel for |
+|---|---|---|---|
+| 1 | Caleb's bedroom temperature (°F) | `sensor.calebs_room_temperature` | indoor card + trend arrow |
+| 2 | Outdoor temperature (°F), from an Ambient Weather station | `sensor.ambient_outdoor_temperature` | outdoor card + trend arrow + Pool page "Air" |
+| 3 | Rain rate, Ambient Weather | `sensor.ambient_hourly_rain_rate` | weather icon |
+| 4 | Solar radiation, Ambient Weather | `sensor.ambient_solar_radiation` | weather icon |
+| 5 | Pool water temperature | `sensor.pool_water_temperature` | Pool page "Water" |
+
+Plus one more, lower confidence:
+
+| # | What it is | Current guess | Used for |
+|---|---|---|---|
+| 6 | Caleb's Spotify player | `media_player.spotify_caleb` | the panel's media mode |
+
+Search the entity registry for `temperature`, `ambient`, `pool`, `solar`,
+`rain`, and `media_player`. Ambient Weather naming varies between stations
+and integration versions — rain rate in particular shows up as
+`..._hourly_rain`, `..._hourly_rain_rate`, `..._rain_rate` or `..._rainrate`,
+so check what actually exists rather than assuming.
+
+**Also check and report these, because they change the configuration below:**
+
+- **Units.** Are the temperatures in °F or °C? The panel formats them as
+  whole degrees Fahrenheit. If HA is serving Celsius, say so.
+- **Solar radiation unit.** The condition template assumes **W/m²** and uses
+  250 as the sunny/cloudy split. If the sensor reports lux or something else,
+  that threshold is meaningless — tell me the unit and a typical midday value.
+- **Rain rate unit.** The template only tests `> 0`, so units barely matter,
+  but confirm it is a *rate* and not a cumulative daily total. A daily total
+  would leave the icon stuck on "rain" for the rest of every rainy day.
+- **Spotify Premium.** If you can tell whether the linked account is Premium,
+  say so. Transport and volume control require it, and the panel has no way to
+  show that a call failed.
+
+---
+
+## Part 2 — Produce the filled-in package
+
+Take the YAML at the end of this file and replace the four entity IDs marked
+`CHECK` with the real ones you found — #1, #2, #3 and #4 from the table above.
+Change nothing else unless Part 1 turned up a reason to (wrong units, a
+different solar threshold).
+
+**#5 (pool water) and #6 (Spotify) are not in this package.** The panel's
+firmware reads those directly, so they are not yours to install — just report
+them and I will put them in the firmware's substitutions.
+
+Leave the entity IDs the package *creates* alone — `..._derivative`,
+`..._trend`, `sensor.outdoor_condition`, `sensor.panel_daily_quote` and
+`input_text.panel_daily_quote`. The panel's firmware already expects those
+exact names.
+
+## Part 3 — Install it, if you can
+
+Where it goes:
+
+```
+<HA config>/packages/bathroom_panel_package.yaml
+```
+
+and `configuration.yaml` needs, once:
+
+```yaml
+homeassistant:
+  packages: !include_dir_named packages
+```
+
+Then check the configuration and restart HA.
+
+If your MCP access is read-only — which is likely, most HA MCP servers expose
+states and services but not the filesystem — **do not fake it.** Say clearly
+that you could not write the file, and hand back the finished YAML for me to
+paste in myself. That is a perfectly good outcome; Part 1 is the part I cannot
+do without you.
+
+## Part 4 — Report back
+
+Give me, in this order:
+
+1. A table of the six entity IDs: what I guessed → what is actually there.
+   Flag any you could not find.
+2. The answers to the unit/Premium questions above.
+3. The complete filled-in package YAML.
+4. Whether you installed it or not.
+
+I will take that back to the repo where the panel firmware lives and update
+the matching substitutions there.
+
+---
+
+## The package to fill in
+
+What each piece does:
+
+- **Two `derivative` sensors** — rate of change of each temperature over a
+  30-minute window, in °F per hour.
+- **Two template sensors** — turn that rate into the three-state string
+  `rising` / `steady` / `falling` that drives the panel's trend arrows. The
+  ±1.0 °F/h threshold is a ±0.5 °F-over-30-min deadband expressed as a rate.
+- **One template sensor** — collapses rain rate, solar radiation and `sun.sun`
+  into `sunny` / `cloudy` / `rain` / `night`, which picks the weather icon.
+- **Quote plumbing** — an `input_text`, two `rest_command`s and a daily
+  automation that fetches a kid-safe dad joke on odd days and a quote on even
+  ones. Deliberately in HA rather than on the ESP32: no TLS on the device, and
+  sources can change without reflashing.
+
+The `has_value()` availability guards are deliberate. Without them a missing
+source floats to 0, which reads as a confident "steady" arrow or a "cloudy"
+icon. Keep them.
+
+```yaml
 # =============================================================================
 # Home Assistant package for the bathroom wall panel
 #
@@ -181,3 +311,4 @@ automation:
                         value: "{{ text }}"
                     - stop: "stored a quote"
             - delay: "00:00:10"
+```
